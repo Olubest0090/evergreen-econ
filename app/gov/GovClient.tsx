@@ -17,6 +17,13 @@ type Preview = {
   unmatched: string[]; unmatchedCount: number; errors: string[];
 };
 
+type Detail = {
+  balances: Record<string, number>; deposited: Record<string, number>; adjusted: Record<string, number>;
+  granted: Record<string, number>; withdrawn: Record<string, number>;
+  grants: { id: string; kind: string; amounts: Record<string, number>; purpose: string | null; paid_at: string | null }[];
+  ledger: { id: number; resource: string; amount: number; kind: string; note: string | null; created_at: string }[];
+};
+
 type Tab = "requests" | "withdrawals" | "members" | "import" | "warchest" | "taxes" | "log";
 
 async function api(path: string, init?: RequestInit) {
@@ -49,6 +56,10 @@ export default function GovClient() {
   const [base, setBase] = useState<Record<string, string>>({});
   const [perCity, setPerCity] = useState<Record<string, string>>({});
   const [csv, setCsv] = useState("");
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [pasteMode, setPasteMode] = useState(false);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [detail, setDetail] = useState<Record<string, Detail>>({});
   const [mode, setMode] = useState<"set" | "add">("set");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [taxForm, setTaxForm] = useState({ name: "", money_pct: "", resource_pct: "", note: "" });
@@ -93,6 +104,21 @@ export default function GovClient() {
       fail(e);
     }
   }
+
+  async function toggleDetail(id: string) {
+    const next = !open[id];
+    setOpen((o) => ({ ...o, [id]: next }));
+    if (next && !detail[id]) {
+      try {
+        const d = (await api(`/api/gov?a=member&id=${id}`)) as Detail;
+        setDetail((m) => ({ ...m, [id]: d }));
+      } catch (e) {
+        fail(e);
+      }
+    }
+  }
+
+  const sums = (t: Record<string, number>) => describe(Object.fromEntries(Object.entries(t).filter(([, v]) => Number(v) !== 0)));
 
   const askNote = (label: string) => window.prompt(label) ?? "";
 
@@ -209,6 +235,46 @@ export default function GovClient() {
                 </div>
                 <p className="text-xs text-[var(--muted)]">{m.nation_name} · {m.discord_username}</p>
                 <p className="mt-1 text-xs">{mine.length ? mine.map((b) => `${fmt(b.balance)} ${LABEL[b.resource]?.toLowerCase()}`).join(", ") : "No balance"}</p>
+                <button type="button" className="btn-ghost mt-2 w-full" onClick={() => void toggleDetail(m.id)}>
+                  {open[m.id] ? "Hide details" : "Deposits, grants and history"}
+                </button>
+                {open[m.id] && (
+                  <div className="mt-2 space-y-2 rounded-xl border border-[var(--border)] p-2.5 text-xs">
+                    {!detail[m.id] && <p className="text-[var(--muted)]">Loading…</p>}
+                    {detail[m.id] && (
+                      <>
+                        <p><span className="text-[var(--muted)]">Deposited in total:</span> {sums(detail[m.id].deposited)}</p>
+                        <p><span className="text-[var(--muted)]">Grants and support received:</span> {sums(detail[m.id].granted)}</p>
+                        <p><span className="text-[var(--muted)]">Withdrawn in total:</span> {sums(detail[m.id].withdrawn)}</p>
+                        <p><span className="text-[var(--muted)]">Staff and sheet adjustments:</span> {sums(detail[m.id].adjusted)}</p>
+                        <div>
+                          <p className="mb-1 font-semibold">Grants and warchest support given</p>
+                          {detail[m.id].grants.length === 0 && <p className="text-[var(--muted)]">None.</p>}
+                          <ul className="space-y-1">
+                            {detail[m.id].grants.map((g) => (
+                              <li key={g.id}>
+                                <span className="capitalize">{g.kind}</span>: {describe(g.amounts)}
+                                <span className="text-[10.5px] text-[var(--muted)]"> · {g.paid_at ? new Date(g.paid_at).toLocaleDateString() : ""}{g.purpose ? ` · ${g.purpose}` : ""}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="mb-1 font-semibold">Recent entries</p>
+                          {detail[m.id].ledger.length === 0 && <p className="text-[var(--muted)]">None.</p>}
+                          <ul className="max-h-48 space-y-1 overflow-y-auto">
+                            {detail[m.id].ledger.map((l) => (
+                              <li key={l.id}>
+                                {Number(l.amount) >= 0 ? "+" : ""}{fmt(l.amount)} {LABEL[l.resource]?.toLowerCase()}
+                                <span className="text-[10.5px] text-[var(--muted)]"> · {String(l.kind).replace("_", " ")} · {new Date(l.created_at).toLocaleDateString()}{l.note ? ` · ${l.note}` : ""}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button className="btn-ghost" onClick={() => {
                     const resource = (window.prompt(`Resource (${RESOURCES.join(", ")}):`, "money") || "").trim().toLowerCase();
@@ -232,9 +298,16 @@ export default function GovClient() {
       {tab === "import" && (
         <div className="card space-y-3">
           <p className="text-xs text-[var(--muted)]">
-            Paste the deposit sheet from Locutus (export it as CSV, or copy the cells). The first row must have column names such as Nation or Nation ID, then Money, Food, Steel and so on. Blank cells are ignored. People who have never logged in here are listed as not found.
+            Send the link of the Locutus deposit sheet. It must be shared as &quot;Anyone with the link can view&quot;. The first row (or a row near the top) needs column names such as Nation or Nation ID, then Money, Food, Steel and so on. Blank cells are ignored. People who have never logged in here are listed as not found.
           </p>
-          <textarea className="input font-mono text-xs" rows={8} value={csv} onChange={(e) => { setCsv(e.target.value); setPreview(null); }} placeholder={"Nation,Money,Food,Steel\nSome Nation,5000000,1200,300"} />
+          {!pasteMode ? (
+            <input className="input" value={sheetUrl} onChange={(e) => { setSheetUrl(e.target.value); setPreview(null); }} placeholder="https://docs.google.com/spreadsheets/d/..." />
+          ) : (
+            <textarea className="input font-mono text-xs" rows={8} value={csv} onChange={(e) => { setCsv(e.target.value); setPreview(null); }} placeholder={"Nation,Money,Food,Steel\nSome Nation,5000000,1200,300"} />
+          )}
+          <button type="button" className="text-xs text-[var(--muted)] underline" onClick={() => { setPasteMode(!pasteMode); setPreview(null); }}>
+            {pasteMode ? "Use a sheet link instead" : "Paste the rows instead"}
+          </button>
           <div className="grid grid-cols-2 gap-2">
             {([["set", "Match the sheet"], ["add", "Add on top"]] as const).map(([k, label]) => (
               <button key={k} type="button" onClick={() => { setMode(k); setPreview(null); }} className={`btn-ghost ${mode === k ? "!border-[var(--accent)] !text-[var(--accent)]" : ""}`}>{label}</button>
@@ -247,7 +320,7 @@ export default function GovClient() {
           </p>
           <button className="btn w-full" onClick={async () => {
             setMsg("");
-            try { setPreview(await post({ action: "import_preview", csv, mode })); } catch (e) { fail(e); }
+            try { setPreview(await post({ action: "import_preview", ...(pasteMode ? { csv } : { url: sheetUrl }), mode })); } catch (e) { fail(e); }
           }}>Preview changes</button>
 
           {preview && (
@@ -270,7 +343,7 @@ export default function GovClient() {
                   if (!window.confirm(`Apply these changes to ${preview.matchedCount} members?`)) return;
                   setMsg("");
                   try {
-                    const r = await post({ action: "import_apply", csv, mode });
+                    const r = await post({ action: "import_apply", ...(pasteMode ? { csv } : { url: sheetUrl }), mode });
                     setMsg(`Done. ${r.entries} entries saved for ${r.members} members.`);
                     setPreview(null);
                     setCsv("");

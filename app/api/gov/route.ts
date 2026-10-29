@@ -4,6 +4,7 @@ import { requireStaff } from "@/lib/auth";
 import crypto from "crypto";
 import { cleanAmounts, isResource, parseAmount } from "@/lib/resources";
 import { parseNumber, readSheet } from "@/lib/sheet";
+import { fetchSheetCsv } from "@/lib/gsheet";
 
 export const dynamic = "force-dynamic";
 
@@ -142,6 +143,35 @@ export async function GET(req: Request) {
     return NextResponse.json({ members, balances: bal ?? [] });
   }
 
+  if (a === "member") {
+    const id = new URL(req.url).searchParams.get("id") || "";
+    if (!UUID.test(id)) return NextResponse.json({ error: "Bad request" }, { status: 400 });
+    const [{ data: balRows }, { data: ledger }, { data: paid }, { data: wds }] = await Promise.all([
+      supa.from("econ_balances").select("resource, balance").eq("member_id", id),
+      supa.from("econ_ledger").select("id, resource, amount, kind, note, created_at").eq("member_id", id).order("created_at", { ascending: false }).limit(2000),
+      supa.from("econ_requests").select("id, kind, amounts, purpose, paid_at, decision_note").eq("member_id", id).eq("status", "paid").order("paid_at", { ascending: false }).limit(100),
+      supa.from("econ_withdrawals").select("amounts").eq("member_id", id).eq("status", "sent").limit(500),
+    ]);
+    const add = (t: Record<string, number>, k: string, v: number) => { t[k] = Math.round(((t[k] ?? 0) + v) * 100) / 100; };
+    const balances: Record<string, number> = {};
+    for (const b of balRows ?? []) balances[b.resource] = Number(b.balance);
+    const deposited: Record<string, number> = {};
+    const adjusted: Record<string, number> = {};
+    for (const l of ledger ?? []) {
+      if (l.kind === "deposit") add(deposited, l.resource, Number(l.amount));
+      if (l.kind === "adjustment") add(adjusted, l.resource, Number(l.amount));
+    }
+    const granted: Record<string, number> = {};
+    for (const r of paid ?? []) for (const [k, v] of Object.entries((r.amounts ?? {}) as Record<string, number>)) add(granted, k, Number(v));
+    const withdrawn: Record<string, number> = {};
+    for (const w of wds ?? []) for (const [k, v] of Object.entries((w.amounts ?? {}) as Record<string, number>)) add(withdrawn, k, Number(v));
+    return NextResponse.json({
+      balances, deposited, adjusted, granted, withdrawn,
+      grants: paid ?? [],
+      ledger: (ledger ?? []).slice(0, 40),
+    });
+  }
+
   if (a === "log") {
     const { data, error } = await supa
       .from("econ_audit_log")
@@ -271,7 +301,13 @@ export async function POST(req: Request) {
   }
 
   if (action === "import_preview" || action === "import_apply") {
-    const csv = String(body.csv ?? "");
+    let csv = String(body.csv ?? "");
+    const link = String(body.url ?? "").trim();
+    if (link) {
+      const got = await fetchSheetCsv(link);
+      if (!got.ok) return bad(got.error);
+      csv = got.csv;
+    }
     const mode = body.mode === "add" ? "add" : "set";
     const result = await planImport(supa, csv, mode);
     if ("error" in result) return bad(result.error);

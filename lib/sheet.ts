@@ -54,24 +54,28 @@ export type Sheet = {
 };
 
 export function readSheet(text: string): { ok: true; sheet: Sheet } | { ok: false; error: string } {
-  if (text.length > 400_000) return { ok: false, error: "That sheet is too big. Import it in parts." };
+  if (text.length > 1_000_000) return { ok: false, error: "That sheet is too big. Import it in parts." };
   const table = parseTable(text);
-  if (table.length < 2) return { ok: false, error: "Paste the sheet including its first row of column names." };
-  if (table.length > 1001) return { ok: false, error: "Too many rows (max 1000 at a time)." };
+  if (table.length < 2) return { ok: false, error: "The sheet needs a first row of column names and at least one row of data." };
 
-  const header = table[0].map((h) => h.toLowerCase().replace(/[^a-z$]/g, ""));
-  const idCol = header.findIndex((h) => ID_HEADERS.has(h));
-  const nameCol = header.findIndex((h) => NAME_HEADERS.has(h));
-  if (idCol < 0 && nameCol < 0) {
-    return { ok: false, error: "I couldn't find a nation column. The first row needs names like Nation or Nation ID." };
+  // The column names are usually on row 1, but allow a few title rows above them.
+  for (let h = 0; h < Math.min(table.length - 1, 10); h++) {
+    const header = table[h].map((c) => c.toLowerCase().replace(/[^a-z$]/g, ""));
+    const idCol = header.findIndex((c) => ID_HEADERS.has(c));
+    const nameCol = header.findIndex((c) => NAME_HEADERS.has(c));
+    if (idCol < 0 && nameCol < 0) continue;
+    const resCols: { col: number; resource: string }[] = [];
+    header.forEach((c, col) => {
+      const r = ALIASES[c];
+      if (r && isResource(r) && !resCols.some((x) => x.resource === r)) resCols.push({ col, resource: r });
+    });
+    if (resCols.length === 0) continue;
+    const rows = table.slice(h + 1);
+    if (rows.length > 1000) return { ok: false, error: "Too many rows (max 1000 at a time)." };
+    return { ok: true, sheet: { idCol, nameCol, resCols, rows } };
   }
-  const resCols: { col: number; resource: string }[] = [];
-  header.forEach((h, col) => {
-    const r = ALIASES[h];
-    if (r && isResource(r) && !resCols.some((x) => x.resource === r)) resCols.push({ col, resource: r });
-  });
-  if (resCols.length === 0) {
-    return { ok: false, error: "I couldn't find any money or resource columns (like Money, Food, Steel)." };
-  }
-  return { ok: true, sheet: { idCol, nameCol, resCols, rows: table.slice(1) } };
+  return {
+    ok: false,
+    error: "I couldn't find the column names. The sheet needs a row with Nation (or Nation ID) and money or resource columns such as Money, Food, Steel.",
+  };
 }
