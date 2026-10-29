@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { RESOURCES, LABEL, describe, fmt } from "@/lib/resources";
+import OffshorePanel from "./OffshorePanel";
 
 type Member = { discord_username: string; nation_id: number; leader_name: string | null } | null;
 type Req = { id: string; kind: string; status: string; amounts: Record<string, number>; purpose: string | null; decision_note: string | null; created_at: string; econ_members: Member };
@@ -24,7 +25,7 @@ type Detail = {
   ledger: { id: number; resource: string; amount: number; kind: string; note: string | null; created_at: string }[];
 };
 
-type Tab = "overview" | "requests" | "withdrawals" | "members" | "import" | "audit" | "warchest" | "taxes" | "roles" | "log";
+type Tab = "overview" | "requests" | "withdrawals" | "members" | "import" | "audit" | "warchest" | "taxes" | "roles" | "log" | "offshore";
 
 type Overview = {
   pendingRequests: number; toSendRequests: number; pendingWithdrawals: number; toSendWithdrawals: number; members: number;
@@ -161,7 +162,7 @@ export default function GovClient() {
   };
   const TABS = ([
     ["overview", "Overview"], ["requests", "Requests"], ["withdrawals", "Withdrawals"], ["members", "Members"], ["import", "Import"],
-    ["audit", "Audit"], ["warchest", "Warchest"], ["taxes", "Taxes"], ["roles", "Roles"], ["log", "Log"],
+    ["audit", "Audit"], ["warchest", "Warchest"], ["taxes", "Taxes"], ["roles", "Roles"], ["log", "Log"], ["offshore", "Offshore"],
   ] as [Tab, string][]).filter(([k]) => allowed(k));
   const showSubs = tab === "requests" || tab === "withdrawals";
   const SUBS: [string, string][] = [["pending", "Pending"], ["approved", "To send"], ["history", "History"]];
@@ -565,6 +566,8 @@ export default function GovClient() {
           ))}
         </div>
       )}
-    </main>
+    
+      {tab === "offshore" && <OffshorePanel />}
+</main>
   );
 }

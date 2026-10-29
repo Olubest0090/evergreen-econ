@@ -1,0 +1,23 @@
+EVERGREEN ECON — offshore + verified bot
+
+1) Vercel env (you said VERIFIED_BOT_KEY is set):
+   - VERIFIED_BOT_KEY = verified bot key
+   - PNW_API_KEY = API key of a nation that can withdraw from the SOURCE alliance bank
+     (for "send all to offshore", that is usually main Evergreen bank access).
+   For paying member withdrawals FROM offshore later, that key must have offshore bank access
+   (or use a second key pair when you split).
+
+2) Unzip into repo root, then wire the panel into gov:
+
+   In app/gov/GovClient.tsx:
+   - import OffshorePanel from "./OffshorePanel";
+   - Add tab type "offshore"
+   - Add to TABS list: ["offshore", "Offshore"]
+   - Render: {tab === "offshore" && <OffshorePanel />}
+
+3) Commit, push, redeploy.
+
+4) Gov → Offshore → set receiver nation ID + source alliance ID → Save
+   → optional "Send everything to offshore" (confirm dialog).
+
+5) Member auto-payouts from offshore are NOT in this zip yet — only config + send-all.
