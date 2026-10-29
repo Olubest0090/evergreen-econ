@@ -24,7 +24,16 @@ type Detail = {
   ledger: { id: number; resource: string; amount: number; kind: string; note: string | null; created_at: string }[];
 };
 
-type Tab = "requests" | "withdrawals" | "members" | "import" | "warchest" | "taxes" | "log";
+type Tab = "overview" | "requests" | "withdrawals" | "members" | "import" | "audit" | "warchest" | "taxes" | "roles" | "log";
+
+type Overview = {
+  pendingRequests: number; toSendRequests: number; pendingWithdrawals: number; toSendWithdrawals: number; members: number;
+  held: Record<string, number>; deposits: Record<string, number>; grants: Record<string, number>; withdrawn: Record<string, number>;
+};
+type AuditRow = { nationId: number; nation: string; leader: string; cities: number; registered: boolean; known: boolean; missing: Record<string, number> };
+type Audit = { targetActive: boolean; holdingsKnown: boolean; total: number; under: AuditRow[]; unknown: number; notRegistered: string[] };
+type StaffRow = { discordId: string; leader: string; nationId: number; role: "default" | "staff" | "head"; perms: string[] | null };
+type MeInfo = { perms: string[] | null; isHead: boolean; canManageRoles: boolean };
 
 async function api(path: string, init?: RequestInit) {
   const res = await fetch(path, { cache: "no-store", ...init });
@@ -43,7 +52,7 @@ const who = (m: Member) => (m ? `${m.leader_name ?? m.discord_username} (#${m.na
 const chipFor = (s: string) => (s === "paid" || s === "sent" ? "chip-ok" : s === "denied" || s === "failed" || s === "cancelled" ? "chip-bad" : "chip-gold");
 
 export default function GovClient() {
-  const [tab, setTab] = useState<Tab>("requests");
+  const [tab, setTab] = useState<Tab>("overview");
   const [sub, setSub] = useState("pending");
   const [msg, setMsg] = useState("");
   const [reqs, setReqs] = useState<Req[] | null>(null);
@@ -55,6 +64,11 @@ export default function GovClient() {
   const [log, setLog] = useState<LogRow[] | null>(null);
   const [base, setBase] = useState<Record<string, string>>({});
   const [perCity, setPerCity] = useState<Record<string, string>>({});
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [audit, setAudit] = useState<Audit | null>(null);
+  const [staffList, setStaffList] = useState<StaffRow[] | null>(null);
+  const [allPerms, setAllPerms] = useState<string[]>([]);
+  const [meInfo, setMeInfo] = useState<MeInfo | null>(null);
   const [csv, setCsv] = useState("");
   const [sheetUrl, setSheetUrl] = useState("");
   const [pasteMode, setPasteMode] = useState(false);
@@ -68,6 +82,16 @@ export default function GovClient() {
 
   const load = useCallback(async () => {
     try {
+      if (tab === "overview") setOverview((await api("/api/gov?a=overview")) as Overview);
+      if (tab === "audit") {
+        setAudit(null);
+        setAudit((await api("/api/gov?a=audit")) as Audit);
+      }
+      if (tab === "roles") {
+        const r = await api("/api/gov?a=staff");
+        setStaffList(r.staff);
+        setAllPerms(r.perms);
+      }
       if (tab === "requests") setReqs((await api(`/api/gov?a=requests&status=${sub}`)).requests);
       if (tab === "withdrawals") setWds((await api(`/api/gov?a=withdrawals&status=${sub}`)).withdrawals);
       if (tab === "members") {
@@ -93,6 +117,10 @@ export default function GovClient() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    api("/api/gov?a=me").then((r) => setMeInfo(r as MeInfo)).catch(() => {});
+  }, []);
 
   async function run(body: Record<string, unknown>, ok: string) {
     setMsg("");
@@ -122,10 +150,19 @@ export default function GovClient() {
 
   const askNote = (label: string) => window.prompt(label) ?? "";
 
-  const TABS: [Tab, string][] = [
-    ["requests", "Requests"], ["withdrawals", "Withdrawals"], ["members", "Members"], ["import", "Import"],
-    ["warchest", "Warchest"], ["taxes", "Taxes"], ["log", "Log"],
-  ];
+  const PERM_FOR: Partial<Record<Tab, string>> = {
+    requests: "requests", withdrawals: "withdrawals", members: "members", import: "import",
+  };
+  const allowed = (t: Tab) => {
+    if (!meInfo) return true;
+    if (t === "roles") return meInfo.canManageRoles;
+    const need = PERM_FOR[t];
+    return !need || meInfo.perms === null || meInfo.perms.includes(need);
+  };
+  const TABS = ([
+    ["overview", "Overview"], ["requests", "Requests"], ["withdrawals", "Withdrawals"], ["members", "Members"], ["import", "Import"],
+    ["audit", "Audit"], ["warchest", "Warchest"], ["taxes", "Taxes"], ["roles", "Roles"], ["log", "Log"],
+  ] as [Tab, string][]).filter(([k]) => allowed(k));
   const showSubs = tab === "requests" || tab === "withdrawals";
   const SUBS: [string, string][] = [["pending", "Pending"], ["approved", "To send"], ["history", "History"]];
 
@@ -154,6 +191,113 @@ export default function GovClient() {
       )}
 
       {msg && <p className="card !p-2.5 text-xs">{msg}</p>}
+
+      {tab === "overview" && (
+        <div className="space-y-3">
+          {!overview && <p className="text-[var(--muted)]">Loading…</p>}
+          {overview && (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  ["Requests waiting", overview.pendingRequests, "requests"],
+                  ["Requests to send", overview.toSendRequests, "requests"],
+                  ["Withdrawals waiting", overview.pendingWithdrawals, "withdrawals"],
+                  ["Withdrawals to send", overview.toSendWithdrawals, "withdrawals"],
+                ] as [string, number, Tab][]).map(([label, n, go]) => (
+                  <button key={label} type="button" onClick={() => { setTab(go); setSub(label.includes("send") ? "approved" : "pending"); }} className="card text-left">
+                    <p className="text-[11px] text-[var(--muted)]">{label}</p>
+                    <p className="text-2xl font-bold">{n}</p>
+                  </button>
+                ))}
+              </div>
+              <div className="card space-y-2 text-xs">
+                <p><span className="text-[var(--muted)]">Members on the site:</span> {overview.members}</p>
+                <p><span className="text-[var(--muted)]">Held in member balances:</span> {describe(overview.held)}</p>
+                <p><span className="text-[var(--muted)]">Deposited, last 30 days:</span> {describe(overview.deposits)}</p>
+                <p><span className="text-[var(--muted)]">Grants and support paid, last 30 days:</span> {describe(overview.grants)}</p>
+                <p><span className="text-[var(--muted)]">Withdrawn, last 30 days:</span> {describe(overview.withdrawn)}</p>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "audit" && (
+        <div className="space-y-3">
+          {!audit && <p className="text-[var(--muted)]">Checking the alliance… this can take a few seconds.</p>}
+          {audit && (
+            <>
+              <div className="card space-y-1 text-xs">
+                <p>{audit.total} nations checked.</p>
+                {!audit.targetActive && <p className="text-[var(--gold)]">No warchest list is set yet. Add one in the Warchest tab to see who is short.</p>}
+                {audit.targetActive && !audit.holdingsKnown && <p className="text-[var(--gold)]">Politics &amp; War isn&apos;t showing members&apos; holdings to this API key, so shortfalls can&apos;t be worked out.</p>}
+                {audit.holdingsKnown && audit.unknown > 0 && <p className="text-[var(--muted)]">{audit.unknown} nations have hidden holdings.</p>}
+              </div>
+              {audit.under.length > 0 && <h2 className="text-sm font-semibold text-[var(--muted)]">Below warchest target ({audit.under.length})</h2>}
+              {audit.under.map((r) => (
+                <div key={r.nationId} className="card !p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">{r.leader} <span className="font-normal text-[var(--muted)]">#{r.nationId} · {r.cities} cities</span></span>
+                    {!r.registered && <span className="chip chip-gold">not on site</span>}
+                  </div>
+                  <p className="mt-1">Short by {describe(r.missing)}</p>
+                </div>
+              ))}
+              {audit.notRegistered.length > 0 && (
+                <div className="card text-xs">
+                  <p className="mb-1 font-semibold">Haven&apos;t logged in to this site ({audit.notRegistered.length})</p>
+                  <p className="text-[var(--muted)]">{audit.notRegistered.join(", ")}</p>
+                </div>
+              )}
+              <button className="btn-ghost w-full" onClick={() => void load()}>Check again</button>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "roles" && (
+        <div className="space-y-2">
+          <p className="text-xs text-[var(--muted)]">
+            Everyone with the econ role in Discord is staff with full access, unless you limit them here. Heads can manage this screen. Until a head is set, any staff member can. Staff appear after they log in once.
+          </p>
+          {!staffList && <p className="text-[var(--muted)]">Loading…</p>}
+          {staffList?.map((p) => (
+            <div key={p.discordId} className="card space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{p.leader} <span className="text-xs font-normal text-[var(--muted)]">#{p.nationId}</span></span>
+                <select
+                  className="input !w-auto !py-1.5 text-xs"
+                  value={p.role}
+                  onChange={(e) => setStaffList((list) => list!.map((x) => (x.discordId === p.discordId ? { ...x, role: e.target.value as StaffRow["role"], perms: x.perms ?? [] } : x)))}
+                >
+                  <option value="default">Full access</option>
+                  <option value="staff">Limited</option>
+                  <option value="head">Head</option>
+                </select>
+              </div>
+              {p.role === "staff" && (
+                <div className="grid grid-cols-2 gap-1.5 text-xs">
+                  {allPerms.map((perm) => (
+                    <label key={perm} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={(p.perms ?? []).includes(perm)}
+                        onChange={(e) =>
+                          setStaffList((list) => list!.map((x) => x.discordId === p.discordId
+                            ? { ...x, perms: e.target.checked ? [...(x.perms ?? []), perm] : (x.perms ?? []).filter((y) => y !== perm) }
+                            : x))
+                        }
+                      />
+                      {perm}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <button className="btn-ghost" onClick={() => void run({ action: "set_staff", discordId: p.discordId, role: p.role, perms: p.perms ?? [] }, "Saved")}>Save</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {tab === "requests" && (
         <div className="space-y-2">

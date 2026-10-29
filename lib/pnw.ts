@@ -43,3 +43,29 @@ export async function fetchCities(nationId: number): Promise<number | null> {
     return null;
   }
 }
+
+export type PnwHolding = PnwNation & { resources: Record<string, number> | null };
+
+const RES = ["money", "food", "coal", "oil", "uranium", "lead", "iron", "bauxite", "gasoline", "munitions", "steel", "aluminum"];
+
+/** Alliance nations with what each one is holding. Resources are null if the API won't show them. */
+export async function fetchAllianceHoldings(allianceId: number): Promise<PnwHolding[]> {
+  try {
+    const data = await gql<{ nations: { data: (PnwNation & Record<string, number | null>)[] } }>(
+      `query($a:[Int]){ nations(alliance_id:$a, first:500){ data { id nation_name leader_name discord num_cities alliance_position ${RES.join(" ")} } } }`,
+      { a: [allianceId] }
+    );
+    return data.nations.data.map((n) => {
+      const resources: Record<string, number> = {};
+      let known = false;
+      for (const k of RES) {
+        const v = n[k];
+        if (typeof v === "number") { resources[k] = v; known = true; }
+      }
+      return { ...n, resources: known ? resources : null };
+    });
+  } catch {
+    const plain = await fetchAllianceNations(allianceId);
+    return plain.map((n) => ({ ...n, resources: null }));
+  }
+}

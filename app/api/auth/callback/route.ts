@@ -67,6 +67,7 @@ export async function GET(req: Request) {
         nation_id: Number(nation.id),
         nation_name: nation.nation_name,
         leader_name: nation.leader_name,
+        staff,
         last_login: new Date().toISOString(),
       },
       { onConflict: "nation_id" }

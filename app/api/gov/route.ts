@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/supabase";
-import { requireStaff } from "@/lib/auth";
+import { PERMS, requireStaff } from "@/lib/auth";
 import crypto from "crypto";
 import { cleanAmounts, isResource, parseAmount } from "@/lib/resources";
 import { parseNumber, readSheet } from "@/lib/sheet";
 import { fetchSheetCsv } from "@/lib/gsheet";
+import { fetchAllianceHoldings } from "@/lib/pnw";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,8 @@ const friendly = (m: string) => {
   return "Something went wrong";
 };
 
+const NOPERM = "You don't have permission for that. Ask the econ head.";
+const noPerm = () => NextResponse.json({ error: NOPERM }, { status: 400 });
 const note = (v: unknown) => String(v ?? "").trim().slice(0, 300);
 
 type Plan = {
@@ -100,6 +103,7 @@ export async function GET(req: Request) {
   const supa = db();
 
   if (a === "requests") {
+    if (!staff.can("requests")) return noPerm();
     const states = status === "history" ? ["paid", "denied", "cancelled"] : status === "approved" ? ["approved"] : ["pending"];
     const { data, error } = await supa
       .from("econ_requests")
@@ -112,6 +116,7 @@ export async function GET(req: Request) {
   }
 
   if (a === "withdrawals") {
+    if (!staff.can("withdrawals")) return noPerm();
     const states = status === "history" ? ["sent", "failed", "denied"] : status === "approved" ? ["approved"] : ["pending_approval"];
     const { data, error } = await supa
       .from("econ_withdrawals")
@@ -124,6 +129,7 @@ export async function GET(req: Request) {
   }
 
   if (a === "members") {
+    if (!staff.can("members")) return noPerm();
     const q = (new URL(req.url).searchParams.get("q") || "").trim().slice(0, 40);
     let query = supa
       .from("econ_members")
@@ -144,6 +150,7 @@ export async function GET(req: Request) {
   }
 
   if (a === "member") {
+    if (!staff.can("members")) return noPerm();
     const id = new URL(req.url).searchParams.get("id") || "";
     if (!UUID.test(id)) return NextResponse.json({ error: "Bad request" }, { status: 400 });
     const [{ data: balRows }, { data: ledger }, { data: paid }, { data: wds }] = await Promise.all([
@@ -169,6 +176,118 @@ export async function GET(req: Request) {
       balances, deposited, adjusted, granted, withdrawn,
       grants: paid ?? [],
       ledger: (ledger ?? []).slice(0, 40),
+    });
+  }
+
+  if (a === "me") {
+    return NextResponse.json({ perms: staff.perms, isHead: staff.isHead, canManageRoles: staff.canManageRoles });
+  }
+
+  if (a === "overview") {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const head = (table: string, col: string, val: string) =>
+      supa.from(table).select("id", { count: "exact", head: true }).eq(col, val);
+    const [pr, ar, pw, aw, mc, bal, dep, paid, sent] = await Promise.all([
+      head("econ_requests", "status", "pending"),
+      head("econ_requests", "status", "approved"),
+      head("econ_withdrawals", "status", "pending_approval"),
+      head("econ_withdrawals", "status", "approved"),
+      supa.from("econ_members").select("id", { count: "exact", head: true }),
+      supa.from("econ_balances").select("resource, balance").limit(20000),
+      supa.from("econ_ledger").select("resource, amount").eq("kind", "deposit").gte("created_at", since).limit(20000),
+      supa.from("econ_requests").select("kind, amounts").eq("status", "paid").gte("paid_at", since).limit(5000),
+      supa.from("econ_withdrawals").select("amounts").eq("status", "sent").gte("sent_at", since).limit(5000),
+    ]);
+    const add = (t: Record<string, number>, k: string, v: number) => { t[k] = Math.round(((t[k] ?? 0) + v) * 100) / 100; };
+    const held: Record<string, number> = {};
+    for (const b of bal.data ?? []) add(held, b.resource, Number(b.balance));
+    const deposits: Record<string, number> = {};
+    for (const l of dep.data ?? []) add(deposits, l.resource, Number(l.amount));
+    const grants: Record<string, number> = {};
+    for (const r of paid.data ?? []) for (const [k, v] of Object.entries((r.amounts ?? {}) as Record<string, number>)) add(grants, k, Number(v));
+    const withdrawn: Record<string, number> = {};
+    for (const w of sent.data ?? []) for (const [k, v] of Object.entries((w.amounts ?? {}) as Record<string, number>)) add(withdrawn, k, Number(v));
+    return NextResponse.json({
+      pendingRequests: pr.count ?? 0, toSendRequests: ar.count ?? 0,
+      pendingWithdrawals: pw.count ?? 0, toSendWithdrawals: aw.count ?? 0,
+      members: mc.count ?? 0, held, deposits, grants, withdrawn,
+    });
+  }
+
+  if (a === "audit") {
+    const { data: cfg } = await supa.from("econ_settings").select("value").eq("key", "alliance").maybeSingle();
+    const allianceId = Number((cfg?.value as { alliance_id?: number } | null)?.alliance_id);
+    if (!allianceId) return NextResponse.json({ error: "The alliance isn't set up yet" }, { status: 400 });
+    let nations;
+    try {
+      nations = await fetchAllianceHoldings(allianceId);
+    } catch (e) {
+      console.error("audit lookup failed:", e);
+      return NextResponse.json({ error: "Could not reach Politics & War right now" }, { status: 502 });
+    }
+    const [{ data: rule }, { data: overrides }, { data: members }] = await Promise.all([
+      supa.from("econ_warchest_rules").select("base, per_city, active").eq("name", "Default").maybeSingle(),
+      supa.from("econ_warchest_overrides").select("nation_id, targets"),
+      supa.from("econ_members").select("nation_id").limit(3000),
+    ]);
+    const registered = new Set((members ?? []).map((m) => Number(m.nation_id)));
+    const over = new Map<number, Record<string, number>>(
+      (overrides ?? []).map((o): [number, Record<string, number>] => [Number(o.nation_id), o.targets as Record<string, number>])
+    );
+    const base = (rule?.base ?? {}) as Record<string, number>;
+    const perCity = (rule?.per_city ?? {}) as Record<string, number>;
+
+    const rows: { nationId: number; nation: string; leader: string; cities: number; registered: boolean; known: boolean; missing: Record<string, number> }[] = [];
+    const notRegistered: string[] = [];
+    let known = 0;
+    for (const n of nations) {
+      if ((n.alliance_position || "").toUpperCase() === "APPLICANT") continue;
+      const id = Number(n.id);
+      if (!registered.has(id)) notRegistered.push(`${n.leader_name} (#${id})`);
+      const target: Record<string, number> = over.get(id) ?? {};
+      if (!over.has(id) && rule?.active) {
+        for (const k of Object.keys({ ...base, ...perCity })) {
+          const v = Number(base[k] ?? 0) + Number(perCity[k] ?? 0) * Number(n.num_cities ?? 0);
+          if (v > 0) target[k] = v;
+        }
+      }
+      const missing: Record<string, number> = {};
+      if (n.resources) {
+        known++;
+        for (const [k, t] of Object.entries(target)) {
+          const short = Math.round((Number(t) - (n.resources[k] ?? 0)) * 100) / 100;
+          if (short > 0) missing[k] = short;
+        }
+      }
+      rows.push({ nationId: id, nation: n.nation_name, leader: n.leader_name, cities: Number(n.num_cities ?? 0), registered: registered.has(id), known: !!n.resources, missing });
+    }
+    rows.sort((a, b) => (b.missing.money ?? 0) - (a.missing.money ?? 0) || Object.keys(b.missing).length - Object.keys(a.missing).length);
+    return NextResponse.json({
+      targetActive: !!rule?.active || over.size > 0,
+      holdingsKnown: known > 0,
+      total: rows.length,
+      under: rows.filter((r) => Object.keys(r.missing).length > 0).slice(0, 300),
+      unknown: rows.filter((r) => !r.known).length,
+      notRegistered: notRegistered.slice(0, 200),
+    });
+  }
+
+  if (a === "staff") {
+    if (!staff.canManageRoles) return noPerm();
+    const [{ data: people }, { data: rows }] = await Promise.all([
+      supa.from("econ_members").select("discord_id, leader_name, discord_username, nation_id").eq("staff", true).order("leader_name"),
+      supa.from("econ_staff").select("discord_id, role, perms"),
+    ]);
+    const byId = new Map<string, { role: string; perms: string[] }>(
+      (rows ?? []).map((r): [string, { role: string; perms: string[] }] => [String(r.discord_id), { role: String(r.role), perms: (r.perms as string[]) ?? [] }])
+    );
+    return NextResponse.json({
+      perms: PERMS,
+      staff: (people ?? []).map((m) => ({
+        discordId: String(m.discord_id), leader: m.leader_name ?? m.discord_username, nationId: Number(m.nation_id),
+        role: byId.get(String(m.discord_id))?.role ?? "default",
+        perms: byId.get(String(m.discord_id))?.perms ?? null,
+      })),
     });
   }
 
@@ -210,6 +329,7 @@ export async function POST(req: Request) {
   const bad = (m: string, s = 400) => NextResponse.json({ error: m }, { status: s });
 
   if (action === "decide") {
+    if (!staff.can("requests")) return noPerm();
     const id = String(body.requestId || "");
     const decision = String(body.decision || "");
     if (!UUID.test(id) || !["approve", "deny"].includes(decision)) return bad("Invalid request");
@@ -220,6 +340,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "paid") {
+    if (!staff.can("requests")) return noPerm();
     const id = String(body.requestId || "");
     if (!UUID.test(id)) return bad("Invalid request");
     const { error } = await supa.rpc("econ_mark_request_paid", {
@@ -229,6 +350,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "withdrawal") {
+    if (!staff.can("withdrawals")) return noPerm();
     const id = String(body.id || "");
     const op = String(body.op || "");
     if (!UUID.test(id) || !["approve", "deny", "sent", "failed"].includes(op)) return bad("Invalid request");
@@ -239,6 +361,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "save_warchest") {
+    if (!staff.can("rules")) return noPerm();
     const base = cleanAmounts(body.base, true);
     const perCity = cleanAmounts(body.per_city, true);
     if (!base || !perCity) return bad("Check the amounts");
@@ -252,6 +375,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "save_tax") {
+    if (!staff.can("rules")) return noPerm();
     const name = String(body.name || "").trim().slice(0, 60);
     const money = Number(body.money_pct);
     const res = Number(body.resource_pct);
@@ -268,6 +392,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "delete_tax") {
+    if (!staff.can("rules")) return noPerm();
     const id = Number(body.id);
     if (!Number.isInteger(id)) return bad("Invalid request");
     await supa.from("econ_tax_rates").delete().eq("id", id);
@@ -276,6 +401,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "adjust") {
+    if (!staff.can("balances")) return noPerm();
     const memberId = String(body.memberId || "");
     const resource = String(body.resource || "");
     const raw = String(body.amount ?? "").trim();
@@ -301,6 +427,7 @@ export async function POST(req: Request) {
   }
 
   if (action === "import_preview" || action === "import_apply") {
+    if (!staff.can("import")) return noPerm();
     let csv = String(body.csv ?? "");
     const link = String(body.url ?? "").trim();
     if (link) {
@@ -365,7 +492,27 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, members: plan.matched.length, entries: entries.length });
   }
 
+  if (action === "set_staff") {
+    if (!staff.canManageRoles) return noPerm();
+    const discordId = String(body.discordId || "");
+    const role = String(body.role || "");
+    if (!/^\d{5,25}$/.test(discordId) || !["head", "staff", "default"].includes(role)) return bad("Invalid request");
+    if (role === "default") {
+      await supa.from("econ_staff").delete().eq("discord_id", discordId);
+    } else {
+      const perms = Array.isArray(body.perms) ? (body.perms as unknown[]).map(String).filter((p) => (PERMS as readonly string[]).includes(p)) : [];
+      const { error } = await supa.from("econ_staff").upsert(
+        { discord_id: discordId, role, perms: role === "head" ? [] : perms, added_by: staff.discordId },
+        { onConflict: "discord_id" }
+      );
+      if (error) return bad("Could not save");
+    }
+    await supa.from("econ_audit_log").insert({ actor_discord_id: staff.discordId, action: "staff_role_set", details: { discord_id: discordId, role, perms: body.perms ?? null } });
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === "member_status") {
+    if (!staff.can("members")) return noPerm();
     const memberId = String(body.memberId || "");
     const status = String(body.status || "");
     if (!UUID.test(memberId) || !["active", "suspended"].includes(status)) return bad("Invalid request");
