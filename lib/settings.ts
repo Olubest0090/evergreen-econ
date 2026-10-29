@@ -12,12 +12,13 @@ export async function setSetting(key: string, value: unknown): Promise<{ error?:
   return error ? { error: error.message } : {};
 }
 
+/** Offshore is an ALLIANCE. P&W still pays a nation; banker_nation_id is optional override. */
 export type OffshoreConfig = {
-  /** Nation that receives bankWithdraw (must be in / control offshore). */
-  receiver_nation_id: number;
-  /** Optional label e.g. "Offshore A". */
+  offshore_alliance_id: number;
+  /** Nation in offshore that receives bankWithdraw (optional; auto-pick if empty). */
+  banker_nation_id?: number;
   label?: string;
-  /** Source alliance bank to empty when sending "everything" (main Evergreen id). */
+  /** Main alliance bank to empty when sending everything. */
   source_alliance_id?: number;
   updated_at?: string;
 };
