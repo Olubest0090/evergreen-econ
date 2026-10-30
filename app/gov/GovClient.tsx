@@ -428,6 +428,13 @@ export default function GovClient() {
                     if (!amount) return;
                     void run({ action: "adjust", memberId: m.id, resource, amount, note: askNote("Reason (saved in the log):") }, "Balance updated");
                   }}>+/− Balance</button>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => void toggleDetail(m.id)}
+                  >
+                    {open[m.id] ? "Hide history" : "Transaction history"}
+                  </button>
                   {m.status === "active" ? (
                     <button className="btn-ghost btn-danger" onClick={() => window.confirm(`Freeze ${m.leader_name}? They will not be able to log in.`) && void run({ action: "member_status", memberId: m.id, status: "suspended", note: askNote("Reason:") }, "Frozen")}>Freeze</button>
                   ) : (
