@@ -1,0 +1,10 @@
+/* Soften Google Translate top banner if it appears */
+.goog-te-banner-frame {
+  display: none !important;
+}
+body {
+  top: 0 !important;
+}
+.goog-te-gadget {
+  font-size: 12px !important;
+}

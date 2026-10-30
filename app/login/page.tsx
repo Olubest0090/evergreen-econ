@@ -1,3 +1,5 @@
+import LanguagePicker from "@/app/components/LanguagePicker";
+
 const MESSAGES: Record<string, string> = {
   state: "That sign-in expired. Please try again.",
   discord: "Discord didn't accept the sign-in. Please try again.",
@@ -12,17 +14,23 @@ const MESSAGES: Record<string, string> = {
   server: "Something went wrong on our side. Please try again in a minute.",
 };
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
   const { error } = await searchParams;
   const message = error ? MESSAGES[error] || MESSAGES.server : "";
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-4">
       <div className="card w-full max-w-md p-6 text-center">
         <p className="text-2xl font-bold">
           <span className="grad-text">Evergreen</span> Econ
         </p>
-        <p className="mt-1 text-sm text-[var(--muted)]">Bank, warchest and requests for alliance members</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Bank, warchest and requests for alliance members
+        </p>
 
         {message && (
           <p className="mt-5 rounded-xl border border-[var(--border)] bg-black/20 p-3 text-left text-sm text-[var(--danger)]">
@@ -34,9 +42,25 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           Log in with Discord
         </a>
         <p className="mt-4 text-xs text-[var(--muted)]">
-          We match your Discord name with the one set on your Politics &amp; War nation, so make sure it is filled in.
+          We match your Discord name with the one set on your Politics &amp; War nation, so make
+          sure it is filled in.
+        </p>
+        <p className="mt-3 text-xs text-[var(--muted)]">
+          By signing in you agree to how we handle data in the{" "}
+          <a href="/privacy" className="underline text-[var(--accent)]">
+            Privacy Policy
+          </a>
+          .
         </p>
       </div>
+
+      <LanguagePicker />
+
+      <p className="text-[10px] text-[var(--muted)]">
+        <a href="/privacy" className="underline">
+          Privacy Policy
+        </a>
+      </p>
     </main>
   );
 }
