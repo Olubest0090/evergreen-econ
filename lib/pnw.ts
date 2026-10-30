@@ -1,4 +1,5 @@
 // Politics & War API v3 (GraphQL), read only.
+import { getPnwApiKey } from "@/lib/secrets";
 export type PnwNation = {
   id: string;
   nation_name: string;
@@ -9,8 +10,8 @@ export type PnwNation = {
 };
 
 async function gql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-  const key = process.env.PNW_API_KEY;
-  if (!key) throw new Error("PNW_API_KEY is not set");
+  const key = await getPnwApiKey();
+  if (!key) throw new Error("PNW_API_KEY is not set (site secrets or Vercel env)");
   const res = await fetch(`https://api.politicsandwar.com/graphql?api_key=${encodeURIComponent(key)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
