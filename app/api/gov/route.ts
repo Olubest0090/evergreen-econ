@@ -6,6 +6,7 @@ import { cleanAmounts, isResource, parseAmount } from "@/lib/resources";
 import { parseNumber, readSheet } from "@/lib/sheet";
 import { fetchSheetCsv } from "@/lib/gsheet";
 import { fetchAllianceHoldings } from "@/lib/pnw";
+import { makeDepositCode, sendDepositConfirmation } from "@/lib/depositNotify";
 
 export const dynamic = "force-dynamic";
 
@@ -423,6 +424,26 @@ export async function POST(req: Request) {
       actor_discord_id: staff.discordId, action: "balance_adjust", target_member: memberId,
       details: { resource, amount, note: note(body.note) },
     });
+    if (amount > 0) {
+      const { data: mem } = await supa
+        .from("econ_members")
+        .select("id, nation_id, leader_name, discord_id")
+        .eq("id", memberId)
+        .maybeSingle();
+      if (mem) {
+        const code = makeDepositCode(Number(mem.nation_id), mem.id);
+        void sendDepositConfirmation({
+          discordId: String(mem.discord_id),
+          accountId: mem.id,
+          nationId: Number(mem.nation_id),
+          leaderName: mem.leader_name,
+          amounts: { [resource]: amount },
+          depositCode: code,
+        }).then((r) => {
+          if (!r.ok) console.error("deposit discord notify:", r.error);
+        });
+      }
+    }
     return NextResponse.json({ ok: true });
   }
 
@@ -489,6 +510,32 @@ export async function POST(req: Request) {
       action: "sheet_import",
       details: { hash, mode, members: plan.matched.length, entries: entries.length, unmatched: plan.unmatched.length },
     });
+    // Discord deposit confirmations (one embed per member with positive deltas)
+    if (mode === "add") {
+      for (const m of plan.matched) {
+        const positive: Record<string, number> = {};
+        for (const [k, v] of Object.entries(m.deltas)) {
+          if (Number(v) > 0) positive[k] = Number(v);
+        }
+        if (!Object.keys(positive).length) continue;
+        const { data: mem } = await supa
+          .from("econ_members")
+          .select("id, nation_id, leader_name, discord_id")
+          .eq("id", m.memberId)
+          .maybeSingle();
+        if (!mem) continue;
+        const code = makeDepositCode(Number(mem.nation_id), mem.id);
+        const r = await sendDepositConfirmation({
+          discordId: String(mem.discord_id),
+          accountId: mem.id,
+          nationId: Number(mem.nation_id),
+          leaderName: mem.leader_name || m.label,
+          amounts: positive,
+          depositCode: code,
+        });
+        if (!r.ok) console.error("deposit discord notify:", r.error);
+      }
+    }
     return NextResponse.json({ ok: true, members: plan.matched.length, entries: entries.length });
   }
 
