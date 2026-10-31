@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/gov/sync",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
