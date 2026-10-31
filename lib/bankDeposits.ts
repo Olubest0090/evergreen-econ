@@ -5,9 +5,10 @@ interface BankRec {
   id: number;
   sid: number;
   date: string;
-  sent_or_received: number;
-  initiator_id: number;
-  sid_type: number;
+  rtype?: number;
+  sender_type?: number;
+  stype?: number;
+  initiator_id?: number;
   money: number;
   food: number;
   coal: number;
@@ -24,13 +25,13 @@ interface BankRec {
 }
 
 async function fetchBankRecs(apiKey: string): Promise<BankRec[]> {
+  // Updated fields matching Politics & War GraphQL schema suggestions
   const fields = `
-    id sid date sent_or_received initiator_id sid_type
+    id sid date rtype sender_type stype
     money food coal oil uranium iron bauxite lead
     gasoline munitions steel aluminum note
   `;
   
-  // Updated queries removing the unsupported alliance_id argument
   const queries = [
     `query { bankrecs(first:100, orderBy:{column:ID, order:DESC}){ data { ${fields} } } }`,
     `query { bankrecs(first:100){ data { ${fields} } } }`,
@@ -74,7 +75,6 @@ export async function syncBankDeposits() {
     try {
       const recs = await fetchBankRecs(mainApiKey);
       result.main.scanned = recs.length;
-      // Add processing logic here or leave existing integration intact
     } catch (e) {
       result.main.errors.push(e instanceof Error ? e.message : "bankrecs failed");
     }
