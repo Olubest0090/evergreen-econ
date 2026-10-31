@@ -5,6 +5,15 @@ import { secretsStatus, writeRuntimeSecrets } from "@/lib/secrets";
 
 export const dynamic = "force-dynamic";
 
+const ALLOWED = [
+  "pnw_api_key",
+  "verified_bot_key",
+  "bot_key_api_key",
+  "bank_api_key",
+  "offshore_api_key",
+  "discord_bot_token",
+] as const;
+
 export async function GET() {
   const staff = await requireStaff();
   if (!staff) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -28,16 +37,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
 
-  const patch: {
-    pnw_api_key?: string;
-    verified_bot_key?: string;
-    discord_bot_token?: string;
-  } = {};
-
-  if ("pnw_api_key" in body) patch.pnw_api_key = String(body.pnw_api_key ?? "");
-  if ("verified_bot_key" in body) patch.verified_bot_key = String(body.verified_bot_key ?? "");
-  if ("discord_bot_token" in body) patch.discord_bot_token = String(body.discord_bot_token ?? "");
-
+  const patch: Record<string, string> = {};
+  for (const k of ALLOWED) {
+    if (k in body) patch[k] = String(body[k] ?? "");
+  }
   if (!Object.keys(patch).length) {
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
   }
@@ -48,10 +51,7 @@ export async function POST(req: Request) {
   await db().from("econ_audit_log").insert({
     actor_discord_id: staff.discordId,
     action: "runtime_secrets_updated",
-    details: {
-      fields: Object.keys(patch),
-      // never log raw values
-    },
+    details: { fields: Object.keys(patch) },
   });
 
   return NextResponse.json({ ok: true, status: await secretsStatus() });
