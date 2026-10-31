@@ -5,7 +5,6 @@ import { syncBankDeposits } from "@/lib/bankDeposits";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Staff: pull recent in-game deposits into site balances (+ Yema offshore → Evergreen net). */
 export async function POST() {
   const staff = await requireStaff();
   if (!staff) return NextResponse.json({ error: "Forbidden" }, { status: 403 });

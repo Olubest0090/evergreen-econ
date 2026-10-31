@@ -80,6 +80,36 @@ export default function OffshorePanel() {
         )}
       </div>
 
+
+      <div className="card space-y-2">
+        <h3 className="font-semibold">In-game deposits</h3>
+        <p className="text-[10.5px] text-[var(--muted)]">
+          Pull recent P&amp;W bank records: member → main bank credits site balance; Yema → offshore
+          credits his site balance and Evergreen net at offshore. First run only remembers history
+          (no backfill).
+        </p>
+        <button
+          type="button"
+          className="btn w-full"
+          disabled={busy}
+          onClick={() =>
+            wrap(async () => {
+              const res = await fetch("/api/gov/sync-deposits", { method: "POST" });
+              const j = await res.json().catch(() => ({}));
+              if (!res.ok) throw new Error(j.error || "Sync failed");
+              setMsg(
+                `Main: +${j.main?.credited ?? 0} credited, ${j.main?.skipped ?? 0} skipped. Offshore: +${j.offshore?.credited ?? 0} credited, ${j.offshore?.skipped ?? 0} skipped.`
+              );
+              if (j.main?.errors?.length || j.offshore?.errors?.length) {
+                setReport(JSON.stringify({ main: j.main, offshore: j.offshore }, null, 2));
+              }
+            })
+          }
+        >
+          Sync in-game deposits
+        </button>
+      </div>
+
       {can ? (
         <>
           <div className="card space-y-3">

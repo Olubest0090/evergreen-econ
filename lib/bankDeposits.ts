@@ -29,27 +29,34 @@ type BankRec = {
 } & Partial<Record<(typeof RES)[number], number | null>>;
 
 async function gqlBankrecs(apiKey: string, allianceId: number): Promise<BankRec[]> {
-  const q = `query($a:[Int]){
-    bankrecs(alliance_id:$a, first:100, orderBy:{column:ID, order:DESC}) {
-      data {
-        id date sid rid stype rtype note
-        money coal oil uranium iron bauxite lead gasoline munitions steel aluminum food
+  const fields = `id date sid rid stype rtype note money coal oil uranium iron bauxite lead gasoline munitions steel aluminum food`;
+  const queries = [
+    `query($a:[Int]){ bankrecs(alliance_id:$a, first:100, orderBy:{column:ID, order:DESC}){ data { ${fields} } } }`,
+    `query($a:[Int]){ bankrecs(alliance_id:$a, first:100){ data { ${fields} } } }`,
+  ];
+  let lastErr = "bankrecs failed";
+  for (const q of queries) {
+    const res = await fetch(
+      `https://api.politicsandwar.com/graphql?api_key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q, variables: { a: [allianceId] } }),
+        cache: "no-store",
       }
+    );
+    if (!res.ok) {
+      lastErr = `P&W bankrecs HTTP ${res.status}`;
+      continue;
     }
-  }`;
-  const res = await fetch(
-    `https://api.politicsandwar.com/graphql?api_key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: q, variables: { a: [allianceId] } }),
-      cache: "no-store",
+    const json = await res.json();
+    if (json.errors?.length) {
+      lastErr = json.errors[0].message;
+      continue;
     }
-  );
-  if (!res.ok) throw new Error(`P&W bankrecs HTTP ${res.status}`);
-  const json = await res.json();
-  if (json.errors?.length) throw new Error(json.errors[0].message);
-  return (json?.data?.bankrecs?.data ?? []) as BankRec[];
+    return (json?.data?.bankrecs?.data ?? []) as BankRec[];
+  }
+  throw new Error(lastErr);
 }
 
 function isNationToAlliance(r: BankRec): boolean {
@@ -179,6 +186,17 @@ async function processAlliance(opts: {
     return;
   }
   opts.bucket.scanned = recs.length;
+
+  // First run: mark current history as seen WITHOUT crediting (no backfill surprise)
+  if (seenSet.size === 0 && recs.length > 0) {
+    const ids = recs.map((r) => String(r.id));
+    await setSetting(stateKey, { ids: ids.slice(0, 800), bootstrapped_at: new Date().toISOString() });
+    opts.bucket.skipped = recs.length;
+    opts.bucket.errors.push(
+      "First sync: existing bankrecs marked seen (no backfill). New deposits from now on will credit the site."
+    );
+    return;
+  }
 
   const ordered = [...recs].reverse();
   const newSeen = [...seenSet];
