@@ -3,6 +3,7 @@
  * Env: DISCORD_BOT_TOKEN — bot must share a server with the user (Evergreen Discord).
  */
 
+import { getDiscordBotToken } from "@/lib/secrets";
 import crypto from "crypto";
 
 const RES_ORDER = [
@@ -50,7 +51,7 @@ async function openDm(botToken: string, userId: string): Promise<string | null> 
 export async function sendDepositConfirmation(
   input: DepositNotifyInput
 ): Promise<{ ok: boolean; error?: string }> {
-  const botToken = process.env.DISCORD_BOT_TOKEN?.trim();
+  const botToken = await getDiscordBotToken();
   if (!botToken) return { ok: false, error: "DISCORD_BOT_TOKEN not set" };
   if (!input.discordId) return { ok: false, error: "No Discord id for member" };
 

@@ -116,10 +116,8 @@ export async function getVerifiedBotKey(): Promise<string | null> {
 
 /** API key paired with the verified bot (may differ from sender nation). */
 export async function getBotKeyApiKey(): Promise<string | null> {
-  return (
-    (await resolve("bot_key_api_key", "BOT_KEY_API_KEY")) ||
-    (await getPnwApiKey())
-  );
+  // Only the explicit bot-owner key — never fall back to BANK/PNW (wrong nation → 401).
+  return resolve("bot_key_api_key", "BOT_KEY_API_KEY");
 }
 
 export async function getBankApiKey(): Promise<string | null> {

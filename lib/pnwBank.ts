@@ -13,7 +13,13 @@
  *   OFFSHORE_API_KEY    (optional) acting nation in the OFFSHORE alliance (falls back to BANK_API_KEY, then PNW_API_KEY)
  */
 
-import { getPnwApiKey, getVerifiedBotKey } from "@/lib/secrets";
+import {
+  getPnwApiKey,
+  getVerifiedBotKey,
+  getBotKeyApiKey,
+  getBankApiKey,
+  getOffshoreApiKey,
+} from "@/lib/secrets";
 
 const RES = [
   "money", "coal", "oil", "uranium", "iron", "bauxite", "lead",
@@ -23,23 +29,32 @@ const RES = [
 export type BankAmounts = Partial<Record<(typeof RES)[number], number>>;
 export type Actor = "source" | "offshore";
 
-const env = (k: string) => process.env[k]?.trim() || "";
 const URL_BASE = "https://api.politicsandwar.com/graphql";
 
+/** Site Keys (/gov/keys) override Vercel for every bank path. */
 async function actingKey(actor: Actor): Promise<{ key: string; name: string }> {
-  const order = actor === "offshore" ? ["OFFSHORE_API_KEY", "BANK_API_KEY"] : ["BANK_API_KEY"];
-  for (const name of order) if (env(name)) return { key: env(name), name };
+  if (actor === "offshore") {
+    const off = await getOffshoreApiKey();
+    if (off) return { key: off, name: "OFFSHORE_API_KEY" };
+    const bank = await getBankApiKey();
+    if (bank) return { key: bank, name: "BANK_API_KEY" };
+  } else {
+    const bank = await getBankApiKey();
+    if (bank) return { key: bank, name: "BANK_API_KEY" };
+  }
   const shared = await getPnwApiKey();
   if (shared) return { key: shared, name: "PNW_API_KEY" };
-  throw new Error(`No API key is set for the ${actor} bank (set ${order[0]} in Vercel)`);
+  throw new Error(
+    `No API key is set for the ${actor} bank (set OFFSHORE_API_KEY / BANK_API_KEY on /gov/keys or Vercel)`
+  );
 }
 
 export async function keyStatus() {
   return {
     botKey: !!(await getVerifiedBotKey()),
-    botKeyApiKey: !!env("BOT_KEY_API_KEY"),
-    bankKey: !!env("BANK_API_KEY") || !!(await getPnwApiKey()),
-    offshoreKey: !!env("OFFSHORE_API_KEY") || !!env("BANK_API_KEY") || !!(await getPnwApiKey()),
+    botKeyApiKey: !!(await getBotKeyApiKey()),
+    bankKey: !!(await getBankApiKey()),
+    offshoreKey: !!(await getOffshoreApiKey()) || !!(await getBankApiKey()),
   };
 }
 
@@ -53,7 +68,7 @@ async function send<T>(actor: Actor, query: string, variables: Record<string, un
     const botKey = await getVerifiedBotKey();
     if (!botKey) throw new Error("The verified bot key is not set (Vercel VERIFIED_BOT_KEY, or the Keys screen)");
     headers["X-Bot-Key"] = botKey;
-    const owner = env("BOT_KEY_API_KEY");
+    const owner = await getBotKeyApiKey();
     if (owner) headers["X-Api-Key"] = owner;
     else {
       // Same account owns the bot key and acts on the bank: send its key in the header only.
