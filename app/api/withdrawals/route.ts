@@ -82,7 +82,7 @@ async function autoSendDepositFromOffshore(opts: {
   receiverNationId: number;
   amounts: BankAmounts;
   actorDiscordId: string;
-}): Promise<{ sent: boolean; record?: string | null; error?: string }> {
+}): Promise<{ sent: boolean; record?: string | null; error?: string; refunded?: boolean }> {
   const supa = db();
   const id = opts.withdrawalId;
 
