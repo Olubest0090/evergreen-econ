@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { bankWithdraw, type BankAmounts } from "@/lib/pnwBank";
 import { db } from "@/lib/supabase";
 import { PERMS, requireStaff } from "@/lib/auth";
 import crypto from "crypto";
@@ -358,7 +359,77 @@ export async function POST(req: Request) {
     const { error } = await supa.rpc("econ_resolve_withdrawal", {
       p_id: id, p_action: op, p_actor: staff.discordId, p_ref: note(body.ref) || null, p_note: note(body.note) || null,
     });
-    return error ? bad(friendly(error.message)) : NextResponse.json({ ok: true });
+    if (error) return bad(friendly(error.message));
+
+    // GRANT: on approve, auto-send from offshore (no separate Send / mark sent)
+    if (op === "approve") {
+      const { data: w } = await supa
+        .from("econ_withdrawals")
+        .select("id, amounts, status, tag, recipient_nation_id, member_id, econ_members(nation_id)")
+        .eq("id", id)
+        .maybeSingle();
+      const tag = String((w as { tag?: string } | null)?.tag || "").toUpperCase();
+      if (w && tag === "GRANT") {
+        const member = Array.isArray((w as { econ_members?: unknown }).econ_members)
+          ? (w as { econ_members: { nation_id?: number }[] }).econ_members[0]
+          : (w as { econ_members?: { nation_id?: number } }).econ_members;
+        const receiver = Number(
+          (w as { recipient_nation_id?: number }).recipient_nation_id || member?.nation_id || 0
+        );
+        if (receiver > 0) {
+          const claim = await supa.rpc("econ_resolve_withdrawal", {
+            p_id: id,
+            p_action: "claim",
+            p_actor: staff.discordId,
+            p_ref: null,
+            p_note: null,
+          });
+          if (!claim.error) {
+            const result = await bankWithdraw({
+              actor: "offshore",
+              receiver,
+              receiverType: "nation",
+              amounts: (w as { amounts: BankAmounts }).amounts,
+              note: "Evergreen Econ GRANT",
+            });
+            if (result.ok) {
+              await supa.rpc("econ_resolve_withdrawal", {
+                p_id: id,
+                p_action: "sent",
+                p_actor: staff.discordId,
+                p_ref: result.id ? `bank record #${result.id}` : "auto GRANT from offshore",
+                p_note: null,
+              });
+              await supa.from("econ_audit_log").insert({
+                actor_discord_id: staff.discordId,
+                action: "withdrawal_grant_auto_sent",
+                details: { withdrawal: id, receiver, record: result.id },
+              });
+              return NextResponse.json({ ok: true, auto_sent: true, record: result.id });
+            }
+            await supa.rpc("econ_resolve_withdrawal", {
+              p_id: id,
+              p_action: "release",
+              p_actor: staff.discordId,
+              p_ref: null,
+              p_note: result.error.slice(0, 250),
+            });
+            await supa
+              .from("econ_withdrawals")
+              .update({ status: "approved", error: result.error.slice(0, 250) })
+              .eq("id", id);
+            return NextResponse.json({
+              ok: true,
+              auto_sent: false,
+              error: result.error,
+              message: "Approved but offshore send failed — retry Send from offshore",
+            });
+          }
+        }
+      }
+    }
+
+    return NextResponse.json({ ok: true });
   }
 
   if (action === "save_warchest") {

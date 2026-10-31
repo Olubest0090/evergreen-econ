@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/supabase";
-import { getMe } from "@/lib/auth";
+import { getMe, requireStaff } from "@/lib/auth";
 import { cleanAmounts, LABEL } from "@/lib/resources";
 import { getSetting } from "@/lib/settings";
 import { bankWithdraw, type BankAmounts } from "@/lib/pnwBank";
@@ -157,9 +157,20 @@ export async function POST(req: Request) {
     .toUpperCase();
   if (!TAGS.has(tag)) {
     return NextResponse.json(
-      { error: "Choose a tag: GRANT, DEPOSIT, or IGNORE" },
+      { error: "Choose a tag: GRANT or DEPOSIT (IGNORE is staff-only)" },
       { status: 400 }
     );
+  }
+
+  // IGNORE is gov-only — members cannot request it
+  if (tag === "IGNORE") {
+    const staff = await requireStaff();
+    if (!staff) {
+      return NextResponse.json(
+        { error: "Only econ staff can use IGNORE" },
+        { status: 403 }
+      );
+    }
   }
 
   const recipientRaw = String(body.recipient ?? "").trim();
