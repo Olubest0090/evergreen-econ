@@ -181,8 +181,14 @@ export async function bankWithdraw(opts: {
   try {
     const args = await bankWithdrawArgs(opts.actor);
     const has = (n: string) => args.find((a) => a.name === n);
-    const vars: Record<string, unknown> = { receiver: opts.receiver, note: (opts.note || "Evergreen Econ").slice(0, 50) };
-    const decl: string[] = ["$receiver: Int!", "$note: String"];
+    // Schema expects receiver: ID! (string), not Int! — hardcoding Int! causes the GraphQL error.
+    const recvArg = has("receiver");
+    const recvType = recvArg?.type?.includes("ID") ? "ID!" : recvArg?.type?.includes("Int") ? "Int!" : "ID!";
+    const vars: Record<string, unknown> = {
+      receiver: recvType.startsWith("ID") ? String(opts.receiver) : opts.receiver,
+      note: (opts.note || "Evergreen Econ").slice(0, 50),
+    };
+    const decl: string[] = [`$receiver: ${recvType}`, "$note: String"];
     const call: string[] = ["receiver: $receiver", "note: $note"];
 
     const rt = has("receiver_type");
