@@ -1,6 +1,18 @@
-Unzip into evergreen-econ root, commit, push.
+YEMA / MEMBER IN-GAME DEPOSITS
 
-Open: https://YOUR-SITE/gov/transactions
+Setup:
+1. Offshore config must have banker_nation_id = Yema (633226).
+2. Keys: BANK_API_KEY (main), OFFSHORE_API_KEY (Yema), etc.
+3. Yema must be an active member on the site (logged in once) to get site balance credit.
+4. Optional: econ_settings key offshore_deposit_nation_ids = [633226] for extra names.
 
-Optional: add a link on gov overview later ("Transactions" → /gov/transactions).
-No nano required for this minor.
+What sync does:
+- Main AA bankrecs: nation→alliance → credit that member's website deposit.
+- Offshore AA bankrecs: only Yema (banker) / listed nations → credit THEIR website deposit
+  AND add the same amounts to Evergreen net-at-offshore books (offshore_evergreen_credit).
+
+Run:
+- Cron: GET /api/cron/bank-deposits?secret=CRON_SECRET
+- Staff: POST /api/gov/sync-deposits
+
+Other alliances depositing into the same offshore are IGNORED (not Evergreen books).
