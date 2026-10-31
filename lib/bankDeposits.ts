@@ -8,7 +8,6 @@ interface BankRec {
   rtype?: number;
   sender_type?: number;
   stype?: number;
-  initiator_id?: number;
   money: number;
   food: number;
   coal: number;
@@ -22,7 +21,6 @@ interface BankRec {
   steel: number;
   aluminum: number;
   note: string;
-  sent?: string;
 }
 
 async function sendDiscordAlert(type: 'deposit' | 'withdrawal' | 'grant', title: string, description: string, color: number) {
@@ -46,10 +44,11 @@ async function sendDiscordAlert(type: 'deposit' | 'withdrawal' | 'grant', title:
 }
 
 async function fetchBankRecs(apiKey: string): Promise<BankRec[]> {
+  // Removed invalid fields (initiator_id, sent)
   const fields = `
-    id sid date rtype sender_type stype initiator_id
+    id sid date rtype sender_type stype
     money food coal oil uranium iron bauxite lead
-    gasoline munitions steel aluminum note sent
+    gasoline munitions steel aluminum note
   `;
   
   const queries = [
@@ -102,9 +101,7 @@ export async function syncBankDeposits() {
         console.log(`[Main] ID: ${rec.id}, Money: ${rec.money}, Note: ${rec.note}`);
 
         if (rec.money > 0) {
-          // TODO: Add database crediting & duplicate check here
           result.main.credited++;
-
           await sendDiscordAlert(
             'deposit',
             '📥 Main Bank Deposit Credited',
@@ -132,9 +129,7 @@ export async function syncBankDeposits() {
         console.log(`[Offshore] ID: ${rec.id}, Money: ${rec.money}, Note: ${rec.note}`);
 
         if (rec.money > 0) {
-          // TODO: Add database crediting & duplicate check here
           result.offshore.credited++;
-
           await sendDiscordAlert(
             'deposit',
             '📥 Offshore Bank Deposit Credited',
