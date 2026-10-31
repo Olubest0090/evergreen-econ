@@ -8,7 +8,69 @@ import { bankWithdraw, type BankAmounts } from "@/lib/pnwBank";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+
 const TAGS = new Set(["GRANT", "DEPOSIT", "IGNORE"]);
+
+/** Map P&W / bank errors to member-facing text. */
+function friendlySendError(raw: string): string {
+  const m = (raw || "").toLowerCase();
+  if (m.includes("blockade") || m.includes("blockaded"))
+    return "You are blockaded — the alliance bank cannot send to you until the blockade ends.";
+  if (m.includes("vacation") || m.includes("vm mode") || m.includes("vacation mode"))
+    return "Your nation is in Vacation Mode — bank transfers cannot complete.";
+  if (m.includes("not enough") || m.includes("insufficient") || m.includes("lack the resources"))
+    return "The offshore bank does not have enough of one or more resources right now. Try again later or contact econ.";
+  if (m.includes("401") || m.includes("unauthorized") || m.includes("don't belong together"))
+    return "Bank keys are misconfigured. Econ staff need to fix API/bot keys.";
+  if (m.includes("429") || m.includes("rate"))
+    return "Politics & War rate-limited the send. Wait a minute and try again.";
+  if (m.includes("receiver") && m.includes("id"))
+    return "Invalid recipient nation for the bank send.";
+  const cut = raw.replace(/\s+/g, " ").trim().slice(0, 180);
+  return cut
+    ? `Could not send in-game: ${cut}`
+    : "Could not send in-game. Your deposit was refunded on the site.";
+}
+
+/** Credit site balance back when in-game send fails after deduct. */
+async function refundDepositWithdrawal(
+  memberId: string,
+  amounts: Record<string, number>,
+  withdrawalId: string,
+  reason: string
+) {
+  const supa = db();
+  const entries = Object.entries(amounts)
+    .filter(([, v]) => Number(v) > 0)
+    .map(([resource, amount]) => ({
+      member_id: memberId,
+      resource,
+      amount: Number(amount),
+      kind: "deposit",
+      note: `Refund: withdrawal ${withdrawalId} not sent — ${reason.slice(0, 120)}`,
+      created_by: "system:auto_refund",
+    }));
+  if (!entries.length) return { ok: true as const };
+  const { error } = await supa.from("econ_ledger").insert(entries);
+  if (error) {
+    console.error("refund ledger failed:", error.message, withdrawalId);
+    return { ok: false as const, error: error.message };
+  }
+  await supa.from("econ_audit_log").insert({
+    actor_discord_id: "system",
+    action: "withdrawal_auto_refund",
+    details: { withdrawal: withdrawalId, amounts, reason: reason.slice(0, 200) },
+  });
+  await supa
+    .from("econ_withdrawals")
+    .update({
+      status: "failed",
+      error: `Refunded on site. ${reason}`.slice(0, 250),
+    })
+    .eq("id", withdrawalId);
+  return { ok: true as const };
+}
+
 
 /**
  * After a DEPOSIT withdrawal is created (balance already deducted by RPC),
@@ -16,6 +78,7 @@ const TAGS = new Set(["GRANT", "DEPOSIT", "IGNORE"]);
  */
 async function autoSendDepositFromOffshore(opts: {
   withdrawalId: string;
+  memberId: string;
   receiverNationId: number;
   amounts: BankAmounts;
   actorDiscordId: string;
@@ -92,11 +155,14 @@ async function autoSendDepositFromOffshore(opts: {
     p_ref: null,
     p_note: result.error.slice(0, 250),
   });
-  // Leave as approved so staff can retry "Send from offshore"
-  await supa
-    .from("econ_withdrawals")
-    .update({ status: "approved", error: result.error.slice(0, 250) })
-    .eq("id", id);
+
+  const friendly = friendlySendError(result.error);
+  const refund = await refundDepositWithdrawal(
+    opts.memberId,
+    opts.amounts as Record<string, number>,
+    id,
+    friendly
+  );
 
   await supa.from("econ_audit_log").insert({
     actor_discord_id: opts.actorDiscordId,
@@ -105,11 +171,19 @@ async function autoSendDepositFromOffshore(opts: {
       withdrawal: id,
       receiver: opts.receiverNationId,
       error: result.error,
+      friendly,
+      refunded: refund.ok,
       tag: "DEPOSIT",
     },
   });
 
-  return { sent: false, error: result.error };
+  return {
+    sent: false,
+    error: refund.ok
+      ? friendly
+      : `${friendly} (refund failed — contact econ urgently)`,
+    refunded: refund.ok,
+  };
 }
 
 export async function GET() {
@@ -238,6 +312,7 @@ export async function POST(req: Request) {
 
     const auto = await autoSendDepositFromOffshore({
       withdrawalId,
+      memberId: me.id,
       receiverNationId: receiver,
       amounts: amounts as BankAmounts,
       actorDiscordId: me.discordId,
@@ -255,18 +330,21 @@ export async function POST(req: Request) {
       });
     }
 
-    // Balance already deducted; staff can retry Send from offshore
-    return NextResponse.json({
-      ok: true,
-      status: "approved",
-      self: data?.self,
-      tag: "DEPOSIT",
-      auto_send: false,
-      error: auto.error,
-      message:
-        auto.error ||
-        "Balance deducted; in-game send failed — staff can retry from Offshore",
-    });
+    return NextResponse.json(
+      {
+        ok: false,
+        status: "failed",
+        self: data?.self,
+        tag: "DEPOSIT",
+        auto_send: false,
+        refunded: auto.refunded !== false,
+        error: auto.error,
+        message:
+          auto.error ||
+          "In-game send failed. Your site balance was refunded for what was not sent.",
+      },
+      { status: 422 }
+    );
   }
 
   // GRANT / IGNORE: still need staff approval (no auto-send)
