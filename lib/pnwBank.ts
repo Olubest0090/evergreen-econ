@@ -1,8 +1,19 @@
 /**
- * P&W bank mutations. 401 = bad/mismatched API key + bot key, or bot not linked to that nation.
- * bankWithdraw always pays a NATION from the API key's alliance bank (not another alliance id).
- * To fund "offshore", withdraw to a nation in the offshore alliance (banker), then they hold/deposit there.
+ * Politics & War bank access.
+ *
+ * Reading uses a plain API key. Mutations (bankWithdraw) need the verified bot key as well.
+ * Two accounts can be involved:
+ *   - the "acting" nation: the account whose alliance bank the money comes from (its API key goes in the URL), and
+ *   - the account that owns the verified bot key (BOT_KEY_API_KEY). If that is the same account, leave it unset.
+ *
+ * Environment variables:
+ *   VERIFIED_BOT_KEY    the verified bot key (can also be set from the site's Keys screen)
+ *   BOT_KEY_API_KEY     (optional) API key of the account that owns the bot key
+ *   BANK_API_KEY        (optional) acting nation in the SOURCE alliance (falls back to PNW_API_KEY)
+ *   OFFSHORE_API_KEY    (optional) acting nation in the OFFSHORE alliance (falls back to BANK_API_KEY, then PNW_API_KEY)
  */
+
+import { getPnwApiKey, getVerifiedBotKey } from "@/lib/secrets";
 
 const RES = [
   "money", "coal", "oil", "uranium", "iron", "bauxite", "lead",
@@ -10,59 +21,75 @@ const RES = [
 ] as const;
 
 export type BankAmounts = Partial<Record<(typeof RES)[number], number>>;
+export type Actor = "source" | "offshore";
 
-function keys() {
-  const apiKey = process.env.PNW_API_KEY?.trim();
-  const botKey = process.env.VERIFIED_BOT_KEY?.trim();
-  if (!apiKey) throw new Error("PNW_API_KEY is not set on the server");
-  if (!botKey) throw new Error("VERIFIED_BOT_KEY is not set on the server");
-  return { apiKey, botKey };
+const env = (k: string) => process.env[k]?.trim() || "";
+const URL_BASE = "https://api.politicsandwar.com/graphql";
+
+async function actingKey(actor: Actor): Promise<{ key: string; name: string }> {
+  const order = actor === "offshore" ? ["OFFSHORE_API_KEY", "BANK_API_KEY"] : ["BANK_API_KEY"];
+  for (const name of order) if (env(name)) return { key: env(name), name };
+  const shared = await getPnwApiKey();
+  if (shared) return { key: shared, name: "PNW_API_KEY" };
+  throw new Error(`No API key is set for the ${actor} bank (set ${order[0]} in Vercel)`);
 }
 
-async function bankGql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-  const { apiKey, botKey } = keys();
+export async function keyStatus() {
+  return {
+    botKey: !!(await getVerifiedBotKey()),
+    botKeyApiKey: !!env("BOT_KEY_API_KEY"),
+    bankKey: !!env("BANK_API_KEY") || !!(await getPnwApiKey()),
+    offshoreKey: !!env("OFFSHORE_API_KEY") || !!env("BANK_API_KEY") || !!(await getPnwApiKey()),
+  };
+}
 
-  // Official bot style: headers only (no key in URL)
-  const res = await fetch("https://api.politicsandwar.com/graphql", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Api-Key": apiKey,
-      "X-Bot-Key": botKey,
-    },
-    body: JSON.stringify({ query, variables }),
-    cache: "no-store",
-  });
+type GqlResult<T> = { status: number; json: { data?: T; errors?: { message: string }[] }; text: string };
 
+async function send<T>(actor: Actor, query: string, variables: Record<string, unknown>, withBot: boolean): Promise<GqlResult<T>> {
+  const { key } = await actingKey(actor);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  let url = `${URL_BASE}?api_key=${encodeURIComponent(key)}`;
+  if (withBot) {
+    const botKey = await getVerifiedBotKey();
+    if (!botKey) throw new Error("The verified bot key is not set (Vercel VERIFIED_BOT_KEY, or the Keys screen)");
+    headers["X-Bot-Key"] = botKey;
+    const owner = env("BOT_KEY_API_KEY");
+    if (owner) headers["X-Api-Key"] = owner;
+    else {
+      // Same account owns the bot key and acts on the bank: send its key in the header only.
+      headers["X-Api-Key"] = key;
+      url = URL_BASE;
+    }
+  }
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ query, variables }), cache: "no-store" });
   const text = await res.text();
-  let json: { data?: T; errors?: { message: string }[] } = {};
-  try {
-    json = JSON.parse(text);
-  } catch {
-    /* ignore */
-  }
-
-  if (res.status === 401) {
-    throw new Error(
-      "P&W returned 401 (unauthorized). Check: (1) PNW_API_KEY is the nation key linked to the verified bot, " +
-        "(2) VERIFIED_BOT_KEY is exact with no spaces, (3) that nation has bank access on the SOURCE alliance, " +
-        "(4) bot is approved for this API key on the account page."
-    );
-  }
-  if (!res.ok) {
-    throw new Error(`P&W bank API HTTP ${res.status}: ${text.slice(0, 180)}`);
-  }
-  if (json.errors?.length) throw new Error(json.errors[0].message);
-  if (!json.data) throw new Error("P&W bank API returned no data");
-  return json.data;
+  let json: GqlResult<T>["json"] = {};
+  try { json = JSON.parse(text); } catch { /* not JSON */ }
+  return { status: res.status, json, text };
 }
 
-export async function fetchAllianceBank(allianceId: number): Promise<BankAmounts> {
-  const data = await bankGql<{
-    alliances: { data: Record<string, number | null>[] };
-  }>(
+const UNAUTH =
+  "P&W returned 401 (unauthorized). The bot key and the API key(s) don't belong together. " +
+  "Set BOT_KEY_API_KEY to the API key of the account that owns the verified bot key, and make sure the acting nation " +
+  "(BANK_API_KEY / OFFSHORE_API_KEY) has bank access in its alliance and has allowed the bot.";
+
+async function run<T>(actor: Actor, query: string, variables: Record<string, unknown>, withBot: boolean): Promise<T> {
+  const r = await send<T>(actor, query, variables, withBot);
+  if (r.status === 401) throw new Error(UNAUTH);
+  if (r.status < 200 || r.status >= 300) throw new Error(`P&W API HTTP ${r.status}: ${r.text.slice(0, 180)}`);
+  if (r.json.errors?.length) throw new Error(r.json.errors[0].message);
+  if (!r.json.data) throw new Error("P&W API returned no data");
+  return r.json.data;
+}
+
+/* ---------- reading ---------- */
+
+export async function fetchAllianceBank(allianceId: number, actor: Actor = "source"): Promise<BankAmounts> {
+  const data = await run<{ alliances: { data: Record<string, number | null>[] } }>(
+    actor,
     `query($id:[Int]){ alliances(id:$id){ data { money coal oil uranium iron bauxite lead gasoline munitions steel aluminum food } } }`,
-    { id: [allianceId] }
+    { id: [allianceId] },
+    false
   );
   const row = data.alliances?.data?.[0];
   if (!row) throw new Error("Alliance bank not found or this API key cannot see that bank");
@@ -74,13 +101,13 @@ export async function fetchAllianceBank(allianceId: number): Promise<BankAmounts
   return out;
 }
 
-/** First member nation id in alliance (fallback banker). */
-export async function firstNationInAlliance(allianceId: number): Promise<number | null> {
-  const data = await bankGql<{
-    nations: { data: { id: string; alliance_position: string | null }[] };
-  }>(
+/** First member nation in an alliance (fallback banker). */
+export async function firstNationInAlliance(allianceId: number, actor: Actor = "source"): Promise<number | null> {
+  const data = await run<{ nations: { data: { id: string; alliance_position: string | null }[] } }>(
+    actor,
     `query($a:[Int]){ nations(alliance_id:$a, first:50){ data { id alliance_position } } }`,
-    { a: [allianceId] }
+    { a: [allianceId] },
+    false
   );
   const rows = data.nations?.data ?? [];
   const nonApp = rows.find((n) => (n.alliance_position || "").toUpperCase() !== "APPLICANT");
@@ -88,41 +115,113 @@ export async function firstNationInAlliance(allianceId: number): Promise<number 
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-export async function bankWithdrawToNation(
-  receiverNationId: number,
-  amounts: BankAmounts,
-  note: string
-): Promise<{ ok: true; raw: unknown } | { ok: false; error: string }> {
+/* ---------- what the API really accepts ---------- */
+
+type TypeRef = { kind: string; name: string | null; ofType: TypeRef | null };
+const typeName = (t: TypeRef | null): string =>
+  !t ? "?" : t.kind === "NON_NULL" ? `${typeName(t.ofType)}!` : t.kind === "LIST" ? `[${typeName(t.ofType)}]` : t.name ?? "?";
+
+let argCache: { name: string; type: string }[] | null = null;
+
+/** The arguments bankWithdraw accepts, read from the live schema. */
+export async function bankWithdrawArgs(actor: Actor = "source"): Promise<{ name: string; type: string }[]> {
+  if (argCache) return argCache;
+  const data = await run<{ __type: { fields: { name: string; args: { name: string; type: TypeRef }[] }[] } | null }>(
+    actor,
+    `{ __type(name:"Mutation"){ fields { name args { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } } }`,
+    {},
+    false
+  );
+  const f = data.__type?.fields?.find((x) => x.name === "bankWithdraw");
+  if (!f) throw new Error("This API doesn't offer bankWithdraw to this key");
+  argCache = f.args.map((a) => ({ name: a.name, type: typeName(a.type) }));
+  return argCache;
+}
+
+export async function diagnose(actor: Actor) {
+  const out: Record<string, unknown> = { actor, keys: await keyStatus() };
   try {
-    const vars: Record<string, unknown> = {
-      receiver: receiverNationId,
-      note: (note || "Evergreen Econ").slice(0, 50),
-    };
-    const argParts: string[] = ["$receiver: Int!", "$note: String"];
-    const callParts: string[] = ["receiver: $receiver", "note: $note"];
+    out.actingKeyFrom = (await actingKey(actor)).name;
+  } catch (e) {
+    out.actingKeyFrom = e instanceof Error ? e.message : "none";
+    return out;
+  }
+  try {
+    const who = await run<{ me: { nation: { id: string; nation_name: string; alliance_id: string | null } } }>(
+      actor, `{ me { nation { id nation_name alliance_id } } }`, {}, false
+    );
+    out.actingNation = who.me?.nation ?? null;
+  } catch (e) {
+    out.actingNation = `could not read: ${e instanceof Error ? e.message : "error"}`;
+  }
+  try {
+    await run(actor, `{ me { nation { id } } }`, {}, true);
+    out.botHeaders = "accepted";
+  } catch (e) {
+    out.botHeaders = e instanceof Error ? e.message : "rejected";
+  }
+  try {
+    argCache = null;
+    out.bankWithdrawArgs = (await bankWithdrawArgs(actor)).map((a) => `${a.name}: ${a.type}`);
+  } catch (e) {
+    out.bankWithdrawArgs = e instanceof Error ? e.message : "could not read";
+  }
+  return out;
+}
+
+/* ---------- sending ---------- */
+
+export async function bankWithdraw(opts: {
+  actor: Actor;
+  receiver: number;
+  receiverType: "nation" | "alliance";
+  amounts: BankAmounts;
+  note: string;
+}): Promise<{ ok: true; id: string | null; raw: unknown } | { ok: false; error: string }> {
+  try {
+    const args = await bankWithdrawArgs(opts.actor);
+    const has = (n: string) => args.find((a) => a.name === n);
+    const vars: Record<string, unknown> = { receiver: opts.receiver, note: (opts.note || "Evergreen Econ").slice(0, 50) };
+    const decl: string[] = ["$receiver: Int!", "$note: String"];
+    const call: string[] = ["receiver: $receiver", "note: $note"];
+
+    const rt = has("receiver_type");
+    if (rt) {
+      vars.receiver_type = opts.receiverType === "alliance" ? 2 : 1;
+      decl.push(`$receiver_type: ${rt.type.endsWith("!") ? "Int!" : "Int"}`);
+      call.push("receiver_type: $receiver_type");
+    } else if (opts.receiverType === "alliance") {
+      return { ok: false, error: "This API only pays nations. Set a banker nation in the offshore alliance." };
+    }
+
+    let any = false;
     for (const k of RES) {
-      const v = amounts[k];
+      const v = opts.amounts[k];
       if (v == null || v <= 0) continue;
-      argParts.push(`$${k}: Float`);
-      callParts.push(`${k}: $${k}`);
+      if (!has(k)) return { ok: false, error: `The API doesn't accept ${k} in bankWithdraw` };
+      decl.push(`$${k}: Float`);
+      call.push(`${k}: $${k}`);
       vars[k] = v;
+      any = true;
     }
-    if (Object.keys(vars).length <= 2) {
-      return { ok: false, error: "Nothing to send (source bank empty)" };
-    }
+    if (!any) return { ok: false, error: "Nothing to send" };
 
-    const mutation = `mutation(${argParts.join(", ")}) {
-      bankWithdraw(${callParts.join(", ")}) {
-        id
-        date
-      }
-    }`;
-
-    const data = await bankGql<{ bankWithdraw: unknown }>(mutation, vars);
-    return { ok: true, raw: data.bankWithdraw };
+    const mutation = `mutation(${decl.join(", ")}) { bankWithdraw(${call.join(", ")}) { id date } }`;
+    const data = await run<{ bankWithdraw: { id?: string | number } | null }>(opts.actor, mutation, vars, true);
+    return { ok: true, id: data.bankWithdraw?.id != null ? String(data.bankWithdraw.id) : null, raw: data.bankWithdraw };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Bank withdraw failed" };
   }
 }
 
 export { RES as BANK_RESOURCES };
+
+/** Kept so older code keeps working: pays a nation from the main (source) bank. */
+export async function bankWithdrawToNation(
+  receiverNationId: number,
+  amounts: BankAmounts,
+  note: string
+): Promise<{ ok: true; raw: unknown } | { ok: false; error: string }> {
+  const r = await bankWithdraw({ actor: "source", receiver: receiverNationId, receiverType: "nation", amounts, note });
+  return r.ok ? { ok: true, raw: r.raw } : r;
+}

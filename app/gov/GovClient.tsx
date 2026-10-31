@@ -149,6 +149,24 @@ export default function GovClient() {
 
   const sums = (t: Record<string, number>) => describe(Object.fromEntries(Object.entries(t).filter(([, v]) => Number(v) !== 0)));
 
+  async function sendFromOffshore(id: string) {
+    if (!window.confirm("Send this withdrawal now from the offshore bank?")) return;
+    setMsg("Sending…");
+    try {
+      const res = await fetch("/api/gov/offshore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send_withdrawal", id }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || "Could not send");
+      setMsg(j.record ? `Sent. Bank record #${j.record}.` : "Sent.");
+    } catch (e) {
+      fail(e);
+    }
+    await load();
+  }
+
   const askNote = (label: string) => window.prompt(label) ?? "";
 
   const PERM_FOR: Partial<Record<Tab, string>> = {
@@ -352,9 +370,20 @@ export default function GovClient() {
                 </div>
               )}
               {w.status === "approved" && (
-                <div className="mt-2 flex gap-2">
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button className="btn" onClick={() => sendFromOffshore(w.id)}>Send from offshore</button>
                   <button className="btn-ghost" onClick={() => run({ action: "withdrawal", id: w.id, op: "sent", ref: askNote("Bank reference or note (optional):") }, "Marked as sent")}>Mark sent</button>
                   <button className="btn-ghost btn-danger" onClick={() => run({ action: "withdrawal", id: w.id, op: "failed", note: askNote("What went wrong?") }, "Marked failed and returned to the balance")}>Failed</button>
+                </div>
+              )}
+              {w.status === "sending" && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-xs text-[var(--gold)]">Being sent now. If this stays here, check the bank records before choosing.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="btn-ghost" onClick={() => run({ action: "withdrawal", id: w.id, op: "sent", ref: askNote("Bank reference or note (optional):") }, "Marked as sent")}>It was sent</button>
+                    <button className="btn-ghost" onClick={() => run({ action: "withdrawal", id: w.id, op: "release" }, "Released. You can send it again.")}>Not sent, release</button>
+                    <button className="btn-ghost btn-danger" onClick={() => run({ action: "withdrawal", id: w.id, op: "failed", note: askNote("What went wrong?") }, "Marked failed and returned to the balance")}>Failed</button>
+                  </div>
                 </div>
               )}
             </div>

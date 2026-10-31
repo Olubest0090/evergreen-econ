@@ -118,7 +118,7 @@ export async function GET(req: Request) {
 
   if (a === "withdrawals") {
     if (!staff.can("withdrawals")) return noPerm();
-    const states = status === "history" ? ["sent", "failed", "denied"] : status === "approved" ? ["approved"] : ["pending_approval"];
+    const states = status === "history" ? ["sent", "failed", "denied"] : status === "approved" ? ["approved", "sending"] : ["pending_approval"];
     const { data, error } = await supa
       .from("econ_withdrawals")
       .select("id, amounts, status, requested_at, bank_ref, error, recipient_nation_id, recipient_is_self, econ_members(discord_username, nation_id, leader_name)")
@@ -354,7 +354,7 @@ export async function POST(req: Request) {
     if (!staff.can("withdrawals")) return noPerm();
     const id = String(body.id || "");
     const op = String(body.op || "");
-    if (!UUID.test(id) || !["approve", "deny", "sent", "failed"].includes(op)) return bad("Invalid request");
+    if (!UUID.test(id) || !["approve", "deny", "sent", "failed", "release"].includes(op)) return bad("Invalid request");
     const { error } = await supa.rpc("econ_resolve_withdrawal", {
       p_id: id, p_action: op, p_actor: staff.discordId, p_ref: note(body.ref) || null, p_note: note(body.note) || null,
     });
