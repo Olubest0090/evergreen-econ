@@ -3,6 +3,7 @@ import { db } from "@/lib/supabase";
 import { setSession } from "@/lib/session";
 import { exchangeCode, fetchGuildMember, fetchUser, normName } from "@/lib/discord";
 import { fetchAllianceNations } from "@/lib/pnw";
+import { syncDepositsForNation } from "@/lib/bankDeposits";
 
 type Alliance = { alliance_id: number | null; guild_id: string | null };
 type Roles = { guild_id: string | null; role_ids: string[] };
@@ -78,6 +79,14 @@ export async function GET(req: Request) {
     }
 
     await setSession(user.id, staff);
+
+    // Credit any in-game deposits for this nation + DM (same as auto bankrec path)
+    try {
+      void syncDepositsForNation(Number(nation.id));
+    } catch (e) {
+      console.error("post-login deposit sync:", e);
+    }
+
     const res = NextResponse.redirect(new URL("/", origin));
     res.cookies.delete("econ_oauth");
     return res;
