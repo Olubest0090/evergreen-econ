@@ -60,6 +60,10 @@ export default function GovClient() {
   const [wds, setWds] = useState<Wd[] | null>(null);
   const [members, setMembers] = useState<Mem[] | null>(null);
   const [balances, setBalances] = useState<Bal[]>([]);
+  const [adjustMember, setAdjustMember] = useState<Mem | null>(null);
+  const [adjustVals, setAdjustVals] = useState<Record<string, string>>({});
+  const [adjustNote, setAdjustNote] = useState("");
+  const [adjustBusy, setAdjustBusy] = useState(false);
   const [q, setQ] = useState("");
   const [taxes, setTaxes] = useState<Tax[] | null>(null);
   const [log, setLog] = useState<LogRow[] | null>(null);
@@ -450,13 +454,16 @@ export default function GovClient() {
                   </div>
                 )}
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button className="btn-ghost" onClick={() => {
-                    const resource = (window.prompt(`Resource (${RESOURCES.join(", ")}):`, "money") || "").trim().toLowerCase();
-                    if (!resource) return;
-                    const amount = window.prompt("Amount. Use 5m to add or -250k to remove:");
-                    if (!amount) return;
-                    void run({ action: "adjust", memberId: m.id, resource, amount, note: askNote("Reason (saved in the log):") }, "Balance updated");
-                  }}>+/− Balance</button>
+                  <button
+                    className="btn-ghost"
+                    onClick={() => {
+                      setAdjustMember(m);
+                      setAdjustVals({});
+                      setAdjustNote("");
+                    }}
+                  >
+                    +/− Balance
+                  </button>
                   <a className="btn-ghost" href={`/gov/transaction?id=${m.id}`}>
                     Transaction history
                   </a>
@@ -600,6 +607,93 @@ export default function GovClient() {
       )}
     
       {tab === "offshore" && <OffshorePanel />}
-</main>
+
+      {adjustMember && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center">
+          <div className="card max-h-[90vh] w-full max-w-lg space-y-3 overflow-y-auto">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="font-semibold">+/− Balance</h3>
+                <p className="text-xs text-[var(--muted)]">
+                  {adjustMember.leader_name || adjustMember.discord_username} · #{adjustMember.nation_id}
+                </p>
+                <p className="mt-1 text-[10.5px] text-[var(--muted)]">
+                  Positive adds (e.g. 5m). Negative removes (e.g. -250k). Leave blank to skip a resource.
+                </p>
+              </div>
+              <button type="button" className="btn-ghost text-xs" onClick={() => setAdjustMember(null)}>
+                Close
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {RESOURCES.map((r) => (
+                <label key={r} className="block text-[10.5px] text-[var(--muted)]">
+                  {LABEL[r] || r}
+                  <input
+                    className="input mt-0.5 w-full font-mono text-xs"
+                    inputMode="text"
+                    placeholder="0"
+                    value={adjustVals[r] || ""}
+                    onChange={(e) =>
+                      setAdjustVals((v) => ({ ...v, [r]: e.target.value }))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+            <label className="block text-xs text-[var(--muted)]">
+              Reason (saved in the log)
+              <input
+                className="input mt-1 w-full"
+                value={adjustNote}
+                onChange={(e) => setAdjustNote(e.target.value)}
+                placeholder="Staff adjustment"
+              />
+            </label>
+            <button
+              type="button"
+              className="btn w-full"
+              disabled={adjustBusy}
+              onClick={() => {
+                void (async () => {
+                  const entries = RESOURCES.map((r) => ({
+                    resource: r,
+                    amount: (adjustVals[r] || "").trim(),
+                  })).filter((e) => e.amount && e.amount !== "0");
+                  if (!entries.length) {
+                    setMsg("Enter at least one amount");
+                    return;
+                  }
+                  setAdjustBusy(true);
+                  try {
+                    for (const e of entries) {
+                      await run(
+                        {
+                          action: "adjust",
+                          memberId: adjustMember.id,
+                          resource: e.resource,
+                          amount: e.amount,
+                          note: adjustNote || "Staff adjustment",
+                        },
+                        ""
+                      );
+                    }
+                    setMsg("Balance updated");
+                    setAdjustMember(null);
+                    setAdjustVals({});
+                    setAdjustNote("");
+                  } finally {
+                    setAdjustBusy(false);
+                  }
+                })();
+              }}
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+      )}
+
+    </main>
   );
 }
