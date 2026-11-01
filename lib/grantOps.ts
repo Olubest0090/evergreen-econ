@@ -10,7 +10,7 @@ export async function approveAndSendGrantRequest(
   const { data: req } = await supa
     .from("econ_requests")
     .select(
-      "id, kind, status, amounts, purpose, member_id, econ_members(nation_id, leader_name)"
+      "id, kind, status, amounts, purpose, member_id, econ_members(nation_id, leader_name, discord_id)"
     )
     .eq("id", requestId)
     .maybeSingle();
@@ -69,6 +69,23 @@ export async function approveAndSendGrantRequest(
     details: { request: requestId, nationId, record: result.id, amounts },
   });
 
+  try {
+    const { sendRequestOutcomeDm } = await import("@/lib/requestDm");
+    const discordId = String((mem as { discord_id?: string } | null)?.discord_id || "");
+    if (discordId) {
+      void sendRequestOutcomeDm({
+        discordId,
+        kind: String(req.kind),
+        decision: "paid",
+        amounts: amounts as Record<string, number>,
+        purpose: req.purpose,
+        bankRecord: result.id ? String(result.id) : null,
+      });
+    }
+  } catch (e) {
+    console.error("request outcome DM:", e);
+  }
+
   return { ok: true, record: result.id };
 }
 
@@ -76,14 +93,59 @@ export async function denyGrantRequest(
   requestId: string,
   actorDiscordId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { error } = await db().rpc("econ_decide_request", {
+  const supa = db();
+  const { data: req } = await supa
+    .from("econ_requests")
+    .select(
+      "id, kind, status, amounts, purpose, econ_members(discord_id)"
+    )
+    .eq("id", requestId)
+    .maybeSingle();
+
+  if (!req) return { ok: false, error: "Request not found" };
+  if (req.status !== "pending") {
+    return { ok: false, error: `Already ${req.status} (cannot deny)` };
+  }
+
+  const { error } = await supa.rpc("econ_decide_request", {
     p_staff: actorDiscordId,
     p_request: requestId,
     p_decision: "deny",
     p_note: "Denied via Discord",
     p_terms: null,
   });
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    // Fallback if RPC state machine rejects
+    const { error: upErr } = await supa
+      .from("econ_requests")
+      .update({
+        status: "denied",
+        decision_note: "Denied via Discord",
+        decided_at: new Date().toISOString(),
+      })
+      .eq("id", requestId)
+      .eq("status", "pending");
+    if (upErr) return { ok: false, error: error.message || upErr.message };
+  }
+
+  try {
+    const { sendRequestOutcomeDm } = await import("@/lib/requestDm");
+    const mem = Array.isArray(req.econ_members) ? req.econ_members[0] : req.econ_members;
+    const discordId = String((mem as { discord_id?: string } | null)?.discord_id || "");
+    if (discordId) {
+      void sendRequestOutcomeDm({
+        discordId,
+        kind: String(req.kind),
+        decision: "denied",
+        amounts: (req.amounts || {}) as Record<string, number>,
+        purpose: req.purpose,
+        note: "Denied via Discord",
+      });
+    }
+  } catch (e) {
+    console.error("deny DM:", e);
+  }
+
   return { ok: true };
 }
 
