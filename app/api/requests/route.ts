@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/supabase";
 import { getMe } from "@/lib/auth";
 import { cleanAmounts } from "@/lib/resources";
+import { notifyGrantRequest } from "@/lib/discordNotify";
 
 export const dynamic = "force-dynamic";
 
@@ -66,10 +67,29 @@ export async function POST(req: Request) {
     );
   }
 
-  const { error } = await supa.from("econ_requests").insert({ member_id: me.id, kind, amounts, purpose });
+  const { data: ins, error } = await supa
+    .from("econ_requests")
+    .insert({ member_id: me.id, kind, amounts, purpose })
+    .select("id")
+    .maybeSingle();
   if (error) {
     console.error("request insert failed:", error.message);
     return NextResponse.json({ error: "Could not save request" }, { status: 500 });
   }
+
+  if (kind === "grant" && ins?.id) {
+    try {
+      void notifyGrantRequest({
+        requestId: String(ins.id),
+        label: me.leaderName || me.username || `Nation #${me.nationId}`,
+        nationId: me.nationId,
+        amounts: amounts as Record<string, number>,
+        purpose,
+      });
+    } catch (e) {
+      console.error("grant request discord notify:", e);
+    }
+  }
+
   return NextResponse.json({ ok: true });
 }

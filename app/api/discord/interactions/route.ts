@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { executeOffshoreSendAll } from "@/lib/offshoreOps";
-import { approveAndSendGrant, denyGrant } from "@/lib/grantOps";
+import {
+  approveAndSendGrant,
+  denyGrant,
+  approveAndSendGrantRequest,
+  denyGrantRequest,
+} from "@/lib/grantOps";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -15,7 +20,7 @@ function verifyDiscord(
   try {
     const key = crypto.createPublicKey({
       key: Buffer.concat([
-        Buffer.from("302a300506032b6570032100", "hex"), // SPKI prefix for ed25519
+        Buffer.from("302a300506032b6570032100", "hex"),
         Buffer.from(publicKeyHex, "hex"),
       ]),
       format: "der",
@@ -49,9 +54,7 @@ export async function POST(req: Request) {
 
   let interaction: {
     type: number;
-    id?: string;
-    token?: string;
-    member?: { user?: { id?: string }; roles?: string[] };
+    member?: { user?: { id?: string } };
     user?: { id?: string };
     data?: { custom_id?: string };
   };
@@ -61,31 +64,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "bad json" }, { status: 400 });
   }
 
-  // PING
   if (interaction.type === 1) {
     return NextResponse.json({ type: 1 });
   }
 
-  // MESSAGE_COMPONENT
   if (interaction.type === 3) {
     const customId = interaction.data?.custom_id || "";
     const actor =
       interaction.member?.user?.id || interaction.user?.id || "discord";
 
-    // Defer response (type 6) then follow up for long bank ops — or type 4 immediate
-    // Use type 5 DEFERRED_UPDATE_MESSAGE for 15 min
-    // Next.js must return quickly; bank can take seconds — return deferred then edit
-
     if (customId === "offshore_send_all") {
-      // Respond later pattern: first ACK with type 5
       const result = await executeOffshoreSendAll(actor);
       if (!result.ok) {
         return NextResponse.json({
           type: 4,
-          data: {
-            content: `❌ Offshore failed: ${result.error}`,
-            flags: 64, // ephemeral
-          },
+          data: { content: `❌ Offshore failed: ${result.error}`, flags: 64 },
         });
       }
       const lines = Object.entries(result.amounts)
@@ -94,13 +87,48 @@ export async function POST(req: Request) {
       return NextResponse.json({
         type: 4,
         data: {
-          content: `✅ Emptied main → offshore.\n${lines}${
-            result.record ? `\nBank record #${result.record}` : ""
+          content: `✅ Main → offshore.\n${lines}${
+            result.record ? `\nRecord #${result.record}` : ""
           }`,
         },
       });
     }
 
+    // Requests page GRANT
+    if (customId.startsWith("grant_req_accept:")) {
+      const id = customId.slice("grant_req_accept:".length);
+      const result = await approveAndSendGrantRequest(id, actor);
+      if (!result.ok) {
+        return NextResponse.json({
+          type: 4,
+          data: { content: `❌ Accept failed: ${result.error}`, flags: 64 },
+        });
+      }
+      return NextResponse.json({
+        type: 4,
+        data: {
+          content: `✅ GRANT request accepted & sent from offshore.${
+            result.record ? ` Record #${result.record}` : ""
+          }`,
+        },
+      });
+    }
+    if (customId.startsWith("grant_req_reject:")) {
+      const id = customId.slice("grant_req_reject:".length);
+      const result = await denyGrantRequest(id, actor);
+      if (!result.ok) {
+        return NextResponse.json({
+          type: 4,
+          data: { content: `❌ Reject failed: ${result.error}`, flags: 64 },
+        });
+      }
+      return NextResponse.json({
+        type: 4,
+        data: { content: "⛔ GRANT request rejected." },
+      });
+    }
+
+    // Bank GRANT withdrawal
     if (customId.startsWith("grant_accept:")) {
       const id = customId.slice("grant_accept:".length);
       const result = await approveAndSendGrant(id, actor);
@@ -113,13 +141,12 @@ export async function POST(req: Request) {
       return NextResponse.json({
         type: 4,
         data: {
-          content: `✅ GRANT accepted and sent from offshore.${
+          content: `✅ GRANT withdrawal sent.${
             result.record ? ` Record #${result.record}` : ""
           }`,
         },
       });
     }
-
     if (customId.startsWith("grant_reject:")) {
       const id = customId.slice("grant_reject:".length);
       const result = await denyGrant(id, actor);
@@ -131,7 +158,7 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({
         type: 4,
-        data: { content: `⛔ GRANT rejected.` },
+        data: { content: "⛔ GRANT withdrawal rejected." },
       });
     }
 
