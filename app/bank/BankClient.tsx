@@ -29,7 +29,7 @@ export default function BankClient({ balances }: { balances: Record<string, numb
   const [amounts, setAmounts] = useState<AmountText>({});
   const [list, setList] = useState<W[] | null>(null);
   const [recipient, setRecipient] = useState("");
-  const [tag, setTag] = useState<"DEPOSIT" | "GRANT" | "IGNORE" | "">("");
+  const [tag, setTag] = useState<"DEPOSIT" | "GRANT" | "">("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -50,7 +50,7 @@ export default function BankClient({ balances }: { balances: Record<string, numb
   async function submit() {
     setMsg("");
     if (!tag) {
-      setMsg("Choose a tag: GRANT, DEPOSIT, or IGNORE");
+      setMsg("Choose a tag: DEPOSIT or GRANT");
       return;
     }
     const parsed = toAmounts(amounts);
@@ -70,22 +70,42 @@ export default function BankClient({ balances }: { balances: Record<string, numb
         }),
       });
       const json = await res.json().catch(() => ({}));
+      // DEPOSIT may return 422 when send fails but refunded
       if (!res.ok) {
-        setMsg(json.error || "Could not request withdrawal");
+        setMsg(
+          json.message ||
+            json.error ||
+            "Could not complete withdrawal"
+        );
+        await load();
         return;
       }
       setAmounts({});
       setRecipient("");
       setTag("");
-      setMsg(
-        tag === "DEPOSIT"
-          ? json.status === "approved"
-            ? "DEPOSIT requested — approved / sending."
-            : "DEPOSIT requested — staff will review."
-          : `${tag} requested — does not deduct site deposit the same way as DEPOSIT. Staff will review.`
-      );
-      await load();
-      if (tag === "DEPOSIT") setTimeout(() => window.location.reload(), 1200);
+      if (tag === "DEPOSIT") {
+        if (json.auto_send && json.status === "sent") {
+          setMsg(
+            json.message ||
+              "Sent from offshore. Check in-game bank / nation resources."
+          );
+        } else if (json.auto_send === false && json.status === "failed") {
+          setMsg(
+            json.message ||
+              json.error ||
+              "Could not send in-game. Site balance was refunded if possible."
+          );
+        } else {
+          setMsg(json.message || "DEPOSIT processed.");
+        }
+        await load();
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        setMsg(
+          "GRANT queued for staff. When they approve, it sends from offshore automatically (does not deduct your deposit balance)."
+        );
+        await load();
+      }
     } finally {
       setBusy(false);
     }
@@ -127,11 +147,12 @@ export default function BankClient({ balances }: { balances: Record<string, numb
       <section className="card">
         <h2 className="mb-2 text-sm font-semibold text-[var(--muted)]">Withdraw / transfer</h2>
         <p className="mb-2 text-[11px] text-[var(--muted)]">
-          Tag is required: <strong>DEPOSIT</strong> deducts site balance · <strong>GRANT</strong>{" "}
-          counts as grant, not deducted from deposit · <strong>IGNORE</strong> neither.
+          <strong>DEPOSIT</strong> deducts your site balance and pays from offshore automatically.
+          <strong> GRANT</strong> does not deduct deposit — staff approve, then it auto-sends from offshore.
+          IGNORE is staff-only.
         </p>
-        <div className="mb-3 grid grid-cols-3 gap-2">
-          {(["DEPOSIT", "GRANT", "IGNORE"] as const).map((t) => (
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          {(["DEPOSIT", "GRANT"] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -178,6 +199,9 @@ export default function BankClient({ balances }: { balances: Record<string, numb
                   {STATUS_TEXT[w.status] ?? w.status}
                 </span>
               </div>
+              {w.error ? (
+                <p className="mt-0.5 text-[11px] text-[var(--danger)]">{w.error}</p>
+              ) : null}
               <p className="text-[10.5px] text-[var(--muted)]">
                 {new Date(w.requested_at).toLocaleString()}
               </p>
