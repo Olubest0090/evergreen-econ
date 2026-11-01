@@ -44,7 +44,9 @@ export async function POST(req: Request) {
       .eq("member_id", me.id)
       .eq("status", "pending")
       .select("id");
-    if (!data?.length) return NextResponse.json({ error: "That request can't be cancelled" }, { status: 400 });
+    if (!data?.length) {
+      return NextResponse.json({ error: "That request can't be cancelled" }, { status: 400 });
+    }
     return NextResponse.json({ ok: true });
   }
 
@@ -62,7 +64,9 @@ export async function POST(req: Request) {
     .in("status", ["pending", "approved"]);
   if ((count ?? 0) >= MAX_OPEN) {
     return NextResponse.json(
-      { error: `You already have ${MAX_OPEN} open requests. Wait for them to be handled first.` },
+      {
+        error: `You already have ${MAX_OPEN} open requests. Wait for them to be handled first.`,
+      },
       { status: 429 }
     );
   }
@@ -77,21 +81,40 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Could not save request" }, { status: 500 });
   }
 
+  let discord: { ok: boolean; error?: string } | null = null;
   if (ins?.id && (kind === "grant" || kind === "warchest")) {
+    const payload = {
+      requestId: String(ins.id),
+      label: me.leaderName || me.username || `Nation #${me.nationId}`,
+      nationId: me.nationId,
+      amounts: amounts as Record<string, number>,
+      purpose,
+    };
     try {
-      const payload = {
-        requestId: String(ins.id),
-        label: me.leaderName || me.username || `Nation #${me.nationId}`,
-        nationId: me.nationId,
-        amounts: amounts as Record<string, number>,
-        purpose,
-      };
-      if (kind === "grant") void notifyGrantRequest(payload);
-      else void notifyWarchestRequest(payload);
+      discord =
+        kind === "grant"
+          ? await notifyGrantRequest(payload)
+          : await notifyWarchestRequest(payload);
+      if (!discord.ok) {
+        console.error("discord notify failed:", discord.error);
+      }
+      await supa.from("econ_audit_log").insert({
+        actor_discord_id: me.discordId,
+        action: discord.ok ? "discord_request_notify_ok" : "discord_request_notify_fail",
+        details: { kind, requestId: ins.id, discord },
+      });
     } catch (e) {
-      console.error("request discord notify:", e);
+      console.error("discord notify exception:", e);
+      discord = { ok: false, error: e instanceof Error ? e.message : "exception" };
     }
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({
+    ok: true,
+    discord: discord
+      ? discord.ok
+        ? { ok: true }
+        : { ok: false, error: discord.error }
+      : null,
+  });
 }
