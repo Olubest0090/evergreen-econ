@@ -1,9 +1,3 @@
-/**
- * Channel notifications + buttons for econ (bot token).
- * DISCORD_BOT_TOKEN
- * DISCORD_DEPOSIT_CHANNEL_ID / DISCORD_GRANT_CHANNEL_ID
- * DISCORD_ECON_ROLE_ID
- */
 import { getDiscordBotToken } from "@/lib/secrets";
 import { RESOURCES } from "@/lib/resources";
 
@@ -39,16 +33,10 @@ async function botFetch(path: string, init: RequestInit = {}) {
     },
   });
   const text = await res.text();
-  let json: unknown = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    /* ignore */
-  }
   if (!res.ok) {
     return { ok: false as const, error: `Discord ${res.status}: ${text.slice(0, 200)}` };
   }
-  return { ok: true as const, json };
+  return { ok: true as const, json: text ? JSON.parse(text) : null };
 }
 
 function amountLines(amounts: Record<string, number>) {
@@ -65,9 +53,7 @@ export async function notifyDepositChannel(opts: {
   note?: string;
 }) {
   const ch = depositChannelId();
-  if (!ch) {
-    return { ok: false as const, error: "DISCORD_DEPOSIT_CHANNEL_ID not set" };
-  }
+  if (!ch) return { ok: false as const, error: "DISCORD_DEPOSIT_CHANNEL_ID not set" };
   return botFetch(`/channels/${ch}/messages`, {
     method: "POST",
     body: JSON.stringify({
@@ -105,22 +91,24 @@ export async function notifyDepositChannel(opts: {
   });
 }
 
-/** Requests page GRANT (econ_requests) */
-export async function notifyGrantRequest(opts: {
-  requestId: string;
-  label: string;
-  nationId: number;
-  amounts: Record<string, number>;
-  purpose?: string;
-}) {
-  const ch = grantChannelId();
-  if (!ch) {
-    return { ok: false as const, error: "DISCORD_GRANT_CHANNEL_ID not set" };
+async function notifyRequest(
+  kind: "grant" | "warchest",
+  opts: {
+    requestId: string;
+    label: string;
+    nationId: number;
+    amounts: Record<string, number>;
+    purpose?: string;
   }
+) {
+  const ch = grantChannelId();
+  if (!ch) return { ok: false as const, error: "DISCORD_GRANT_CHANNEL_ID not set" };
   const role = roleId();
+  const title = kind === "grant" ? "GRANT" : "WARCHEST";
   const content = role
-    ? `<@&${role}> **GRANT request** from ${opts.label}`
-    : `**GRANT request** from ${opts.label}`;
+    ? `<@&${role}> **${title} request** from ${opts.label}`
+    : `**${title} request** from ${opts.label}`;
+  const prefix = kind === "grant" ? "grant_req" : "warchest_req";
 
   return botFetch(`/channels/${ch}/messages`, {
     method: "POST",
@@ -128,7 +116,7 @@ export async function notifyGrantRequest(opts: {
       content,
       embeds: [
         {
-          title: "GRANT request (Requests)",
+          title: `${title} request (Requests)`,
           description: [
             `**Member:** ${opts.label} (#${opts.nationId})`,
             amountLines(opts.amounts),
@@ -137,7 +125,7 @@ export async function notifyGrantRequest(opts: {
           ]
             .filter(Boolean)
             .join("\n"),
-          color: 0xf59e0b,
+          color: kind === "grant" ? 0xf59e0b : 0x3b82f6,
           timestamp: new Date().toISOString(),
         },
       ],
@@ -149,13 +137,13 @@ export async function notifyGrantRequest(opts: {
               type: 2,
               style: 3,
               label: "Accept",
-              custom_id: `grant_req_accept:${opts.requestId}`,
+              custom_id: `${prefix}_accept:${opts.requestId}`,
             },
             {
               type: 2,
               style: 4,
               label: "Reject",
-              custom_id: `grant_req_reject:${opts.requestId}`,
+              custom_id: `${prefix}_reject:${opts.requestId}`,
             },
           ],
         },
@@ -164,7 +152,26 @@ export async function notifyGrantRequest(opts: {
   });
 }
 
-/** Bank tab GRANT withdrawal (econ_withdrawals) */
+export async function notifyGrantRequest(opts: {
+  requestId: string;
+  label: string;
+  nationId: number;
+  amounts: Record<string, number>;
+  purpose?: string;
+}) {
+  return notifyRequest("grant", opts);
+}
+
+export async function notifyWarchestRequest(opts: {
+  requestId: string;
+  label: string;
+  nationId: number;
+  amounts: Record<string, number>;
+  purpose?: string;
+}) {
+  return notifyRequest("warchest", opts);
+}
+
 export async function notifyGrantWithdrawal(opts: {
   withdrawalId: string;
   label: string;
@@ -173,9 +180,7 @@ export async function notifyGrantWithdrawal(opts: {
   recipientNationId: number;
 }) {
   const ch = grantChannelId();
-  if (!ch) {
-    return { ok: false as const, error: "DISCORD_GRANT_CHANNEL_ID not set" };
-  }
+  if (!ch) return { ok: false as const, error: "DISCORD_GRANT_CHANNEL_ID not set" };
   const role = roleId();
   const content = role
     ? `<@&${role}> **GRANT withdrawal** from ${opts.label}`

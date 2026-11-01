@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/supabase";
 import { getMe } from "@/lib/auth";
 import { cleanAmounts } from "@/lib/resources";
-import { notifyGrantRequest } from "@/lib/discordNotify";
+import { notifyGrantRequest, notifyWarchestRequest } from "@/lib/discordNotify";
 
 export const dynamic = "force-dynamic";
 
@@ -77,17 +77,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Could not save request" }, { status: 500 });
   }
 
-  if (kind === "grant" && ins?.id) {
+  if (ins?.id && (kind === "grant" || kind === "warchest")) {
     try {
-      void notifyGrantRequest({
+      const payload = {
         requestId: String(ins.id),
         label: me.leaderName || me.username || `Nation #${me.nationId}`,
         nationId: me.nationId,
         amounts: amounts as Record<string, number>,
         purpose,
-      });
+      };
+      if (kind === "grant") void notifyGrantRequest(payload);
+      else void notifyWarchestRequest(payload);
     } catch (e) {
-      console.error("grant request discord notify:", e);
+      console.error("request discord notify:", e);
     }
   }
 

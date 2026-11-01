@@ -4,7 +4,7 @@ import { getMe, requireStaff } from "@/lib/auth";
 import { cleanAmounts, LABEL } from "@/lib/resources";
 import { getSetting } from "@/lib/settings";
 import { bankWithdraw, type BankAmounts } from "@/lib/pnwBank";
-import { notifyGrantRequest } from "@/lib/discordNotify";
+import { notifyGrantWithdrawal } from "@/lib/discordNotify";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -375,7 +375,7 @@ export async function POST(req: Request) {
   }
   if (tag === "GRANT" && ins?.id) {
     try {
-      void notifyGrantRequest({
+      void notifyGrantWithdrawal({
         withdrawalId: String(ins.id),
         label: me.leaderName || me.username || `Nation #${me.nationId}`,
         nationId: me.nationId,

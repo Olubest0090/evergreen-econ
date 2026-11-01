@@ -128,6 +128,40 @@ export async function POST(req: Request) {
       });
     }
 
+    // Requests WARCHEST
+    if (customId.startsWith("warchest_req_accept:")) {
+      const id = customId.slice("warchest_req_accept:".length);
+      const result = await approveAndSendGrantRequest(id, actor);
+      if (!result.ok) {
+        return NextResponse.json({
+          type: 4,
+          data: { content: `❌ Accept failed: ${result.error}`, flags: 64 },
+        });
+      }
+      return NextResponse.json({
+        type: 4,
+        data: {
+          content: `✅ WARCHEST accepted & sent from offshore.${
+            result.record ? ` Record #${result.record}` : ""
+          }`,
+        },
+      });
+    }
+    if (customId.startsWith("warchest_req_reject:")) {
+      const id = customId.slice("warchest_req_reject:".length);
+      const result = await denyGrantRequest(id, actor);
+      if (!result.ok) {
+        return NextResponse.json({
+          type: 4,
+          data: { content: `❌ Reject failed: ${result.error}`, flags: 64 },
+        });
+      }
+      return NextResponse.json({
+        type: 4,
+        data: { content: "⛔ WARCHEST request rejected." },
+      });
+    }
+
     // Bank GRANT withdrawal
     if (customId.startsWith("grant_accept:")) {
       const id = customId.slice("grant_accept:".length);

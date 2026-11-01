@@ -16,7 +16,9 @@ export async function approveAndSendGrantRequest(
     .maybeSingle();
 
   if (!req) return { ok: false, error: "Request not found" };
-  if (req.kind !== "grant") return { ok: false, error: "Not a grant request" };
+  if (req.kind !== "grant" && req.kind !== "warchest") {
+    return { ok: false, error: "Not a grant/warchest request" };
+  }
   if (req.status !== "pending" && req.status !== "approved") {
     return { ok: false, error: `Status is ${req.status}` };
   }
@@ -42,7 +44,7 @@ export async function approveAndSendGrantRequest(
     receiver: nationId,
     receiverType: "nation",
     amounts,
-    note: `Evergreen GRANT request ${requestId.slice(0, 8)}`,
+    note: `Evergreen ${String(req.kind).toUpperCase()} request ${requestId.slice(0, 8)}`,
   });
 
   if (!result.ok) {
@@ -63,7 +65,7 @@ export async function approveAndSendGrantRequest(
 
   await supa.from("econ_audit_log").insert({
     actor_discord_id: actorDiscordId,
-    action: "grant_request_discord_sent",
+    action: "request_discord_sent",
     details: { request: requestId, nationId, record: result.id, amounts },
   });
 
@@ -174,3 +176,7 @@ export async function denyGrant(
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+
+export const approveAndSendWarchestRequest = approveAndSendGrantRequest;
+export const denyWarchestRequest = denyGrantRequest;
