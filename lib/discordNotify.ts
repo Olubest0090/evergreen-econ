@@ -10,8 +10,19 @@ import { RESOURCES } from "@/lib/resources";
 
 const API = "https://discord.com/api/v10";
 
-function channelId() {
-  return process.env.DISCORD_ECON_CHANNEL_ID?.trim() || "";
+function depositChannelId() {
+  return (
+    process.env.DISCORD_DEPOSIT_CHANNEL_ID?.trim() ||
+    process.env.DISCORD_ECON_CHANNEL_ID?.trim() ||
+    ""
+  );
+}
+function grantChannelId() {
+  return (
+    process.env.DISCORD_GRANT_CHANNEL_ID?.trim() ||
+    process.env.DISCORD_ECON_CHANNEL_ID?.trim() ||
+    ""
+  );
 }
 function roleId() {
   return process.env.DISCORD_ECON_ROLE_ID?.trim() || "";
@@ -58,8 +69,12 @@ export async function notifyDepositChannel(opts: {
   scope: "main" | "offshore";
   note?: string;
 }) {
-  const ch = channelId();
-  if (!ch) return { ok: false as const, error: "DISCORD_ECON_CHANNEL_ID not set" };
+  const ch = depositChannelId();
+  if (!ch)
+    return {
+      ok: false as const,
+      error: "DISCORD_DEPOSIT_CHANNEL_ID (or DISCORD_ECON_CHANNEL_ID) not set",
+    };
 
   const body = {
     embeds: [
@@ -108,8 +123,12 @@ export async function notifyGrantRequest(opts: {
   amounts: Record<string, number>;
   recipientNationId: number;
 }) {
-  const ch = channelId();
-  if (!ch) return { ok: false as const, error: "DISCORD_ECON_CHANNEL_ID not set" };
+  const ch = grantChannelId();
+  if (!ch)
+    return {
+      ok: false as const,
+      error: "DISCORD_GRANT_CHANNEL_ID (or DISCORD_ECON_CHANNEL_ID) not set",
+    };
   const role = roleId();
   const content = role
     ? `<@&${role}> **GRANT request** from ${opts.label}`

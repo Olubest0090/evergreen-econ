@@ -1,19 +1,13 @@
-1) Vercel / Keys env:
+1) Vercel env:
    DISCORD_BOT_TOKEN=...
-   DISCORD_ECON_CHANNEL_ID=...   (channel for deposit + grant alerts)
-   DISCORD_ECON_ROLE_ID=...      (econ staff role to ping on GRANT)
-   DISCORD_PUBLIC_KEY=...        (Application → Public Key, for button clicks)
+   DISCORD_DEPOSIT_CHANNEL_ID=...   (deposit alerts + Offshore now button)
+   DISCORD_GRANT_CHANNEL_ID=...     (GRANT requests — different channel)
+   DISCORD_ECON_ROLE_ID=...         (role pinged on GRANT)
+   DISCORD_PUBLIC_KEY=...           (Application Public Key for buttons)
 
-2) Discord Developer Portal → your bot app → General Information → copy Public Key
+   Optional fallback: DISCORD_ECON_CHANNEL_ID if the specific ones are unset.
 
-3) Interactions Endpoint URL:
+2) Interactions Endpoint URL:
    https://evergreen-econ.vercel.app/api/discord/interactions
-   (must return 200 on Discord's ping — deploy first, then save URL)
 
-4) Bot needs: Send Messages, Embed Links, Use External Emojis (optional),
-   View Channel in the econ channel. Invite with applications.commands if needed.
-
-5) Flow:
-   - Deposit credited → channel message + button "Offshore now" (sends main→offshore, no SEND type)
-   - Member GRANT request → pings @econ role + Accept / Reject
-   - Accept → approve + send from offshore as GRANT
+3) Bot needs View Channel + Send Messages + Embed Links in BOTH channels.
