@@ -36,8 +36,8 @@ async function actingKey(actor: Actor): Promise<{ key: string; name: string }> {
   if (actor === "offshore") {
     const off = await getOffshoreApiKey();
     if (off) return { key: off, name: "OFFSHORE_API_KEY" };
-    const bank = await getBankApiKey();
-    if (bank) return { key: bank, name: "BANK_API_KEY" };
+    // Never fall back to another bank's key: that would pay from the wrong bank.
+    throw new Error("The offshore API key is not set. Add OFFSHORE_API_KEY on /gov/keys (or Vercel).");
   } else {
     const bank = await getBankApiKey();
     if (bank) return { key: bank, name: "BANK_API_KEY" };
@@ -54,7 +54,7 @@ export async function keyStatus() {
     botKey: !!(await getVerifiedBotKey()),
     botKeyApiKey: !!(await getBotKeyApiKey()),
     bankKey: !!(await getBankApiKey()),
-    offshoreKey: !!(await getOffshoreApiKey()) || !!(await getBankApiKey()),
+    offshoreKey: !!(await getOffshoreApiKey()),
   };
 }
 

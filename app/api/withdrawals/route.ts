@@ -33,28 +33,24 @@ function friendlySendError(raw: string): string {
     : "Could not send in-game. Your deposit was refunded on the site.";
 }
 
-/** Credit site balance back when in-game send fails after deduct. */
+/** Give the held balance back when the in-game send fails (the database returns exactly what was held). */
 async function refundDepositWithdrawal(
   memberId: string,
   amounts: Record<string, number>,
   withdrawalId: string,
   reason: string
 ) {
+  void memberId;
   const supa = db();
-  const entries = Object.entries(amounts)
-    .filter(([, v]) => Number(v) > 0)
-    .map(([resource, amount]) => ({
-      member_id: memberId,
-      resource,
-      amount: Number(amount),
-      kind: "deposit",
-      note: `Refund: withdrawal ${withdrawalId} not sent — ${reason.slice(0, 120)}`,
-      created_by: "system:auto_refund",
-    }));
-  if (!entries.length) return { ok: true as const };
-  const { error } = await supa.from("econ_ledger").insert(entries);
+  const { error } = await supa.rpc("econ_resolve_withdrawal", {
+    p_id: withdrawalId,
+    p_action: "failed",
+    p_actor: "system",
+    p_ref: null,
+    p_note: `Refunded on site. ${reason}`.slice(0, 250),
+  });
   if (error) {
-    console.error("refund ledger failed:", error.message, withdrawalId);
+    console.error("refund failed:", error.message, withdrawalId);
     return { ok: false as const, error: error.message };
   }
   await supa.from("econ_audit_log").insert({
@@ -62,13 +58,6 @@ async function refundDepositWithdrawal(
     action: "withdrawal_auto_refund",
     details: { withdrawal: withdrawalId, amounts, reason: reason.slice(0, 200) },
   });
-  await supa
-    .from("econ_withdrawals")
-    .update({
-      status: "failed",
-      error: `Refunded on site. ${reason}`.slice(0, 250),
-    })
-    .eq("id", withdrawalId);
   return { ok: true as const };
 }
 
