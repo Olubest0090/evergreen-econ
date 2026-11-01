@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import crypto from "crypto";
 
 const COOKIE = "econ_session";
-const MAX_AGE = 60 * 60 * 12; // 12 hours: staff access is re-checked against Discord at every login
+const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 function secret(): string {
   const s = process.env.AUTH_SECRET;
