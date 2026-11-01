@@ -139,8 +139,17 @@ export default function BankClient({ balances, staff }: { balances: Record<strin
       <section className="card">
         <h2 className="mb-1 text-sm font-semibold text-[var(--muted)]">Deposit</h2>
         <p className="text-sm">
-          Send money or resources to the alliance bank in the game. Econ staff credit your site
-          balance when it shows in bank records.
+          Deposit your money/resources here:{" "}
+          <a
+            href="https://politicsandwar.com/alliance/id=15590&display=bank"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-[var(--accent)] underline underline-offset-2"
+          >
+            Evergreen Bank
+          </a>
+          . Your balance will be updated automatically once your deposit appears in the
+          alliance bank records.
         </p>
       </section>
 
@@ -148,7 +157,8 @@ export default function BankClient({ balances, staff }: { balances: Record<strin
         <h2 className="mb-2 text-sm font-semibold text-[var(--muted)]">Withdraw / transfer</h2>
         <p className="mb-2 text-[11px] text-[var(--muted)]">
           <strong>DEPOSIT</strong> deducts your site balance and pays from offshore automatically.
-          <strong> GRANT</strong> does not deduct deposit — staff approve, then it auto-sends from offshore.
+          <strong> GRANT</strong> does not deduct your deposit balance — staff approve the request,
+          then it is automatically sent from offshore.
           {staff ? " IGNORE is available to Econ staff." : ""}
         </p>
         <div className="mb-3 grid grid-cols-2 gap-2">
