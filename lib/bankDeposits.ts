@@ -13,6 +13,7 @@ import { getSetting, setSetting, type OffshoreConfig } from "@/lib/settings";
 import { getBankApiKey, getOffshoreApiKey, getPnwApiKey } from "@/lib/secrets";
 import { RESOURCES, type Resource } from "@/lib/resources";
 import { makeDepositCode, sendDepositConfirmation } from "@/lib/depositNotify";
+import { notifyDepositChannel } from "@/lib/discordNotify";
 
 type BankRec = {
   id: string | number;
@@ -299,6 +300,17 @@ async function syncAlliance(opts: {
       });
     } catch (e) {
       console.error("deposit DM failed", e);
+    }
+    try {
+      void notifyDepositChannel({
+        label: mem.leader_name || `Nation #${nationId}`,
+        nationId,
+        amounts: amounts as Record<string, number>,
+        scope: opts.scope,
+        note: record.note || undefined,
+      });
+    } catch (e) {
+      console.error("deposit channel notify failed", e);
     }
   }
 

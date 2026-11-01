@@ -4,6 +4,7 @@ import { getMe, requireStaff } from "@/lib/auth";
 import { cleanAmounts, LABEL } from "@/lib/resources";
 import { getSetting } from "@/lib/settings";
 import { bankWithdraw, type BankAmounts } from "@/lib/pnwBank";
+import { notifyGrantRequest } from "@/lib/discordNotify";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -372,6 +373,22 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+  if (tag === "GRANT" && ins?.id) {
+    try {
+      void notifyGrantRequest({
+        withdrawalId: String(ins.id),
+        label: me.leaderName || me.username || `Nation #${me.nationId}`,
+        nationId: me.nationId,
+        amounts: amounts as Record<string, number>,
+        recipientNationId: recipientRaw
+          ? Number(recipientRaw)
+          : me.nationId,
+      });
+    } catch (e) {
+      console.error("grant discord notify:", e);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     status: ins?.status || "pending_approval",
