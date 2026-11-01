@@ -56,7 +56,7 @@ export default async function HomePage() {
       <section className="card">
         <h2 className="mb-2 text-sm font-semibold text-[var(--muted)]">Your bank balance</h2>
         {owned.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">Nothing here yet. Deposit to the alliance bank and econ staff will credit it.</p>
+          <p className="text-sm text-[var(--muted)]">Nothing here yet. Deposit to the alliance bank and you will be credited automatically.</p>
         ) : (
           <div className="grid grid-cols-2 gap-2">
             {owned.map((k) => (
