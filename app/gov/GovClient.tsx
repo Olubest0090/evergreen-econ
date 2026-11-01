@@ -52,7 +52,7 @@ const post = (body: Record<string, unknown>) =>
 const who = (m: Member) => (m ? `${m.leader_name ?? m.discord_username} (#${m.nation_id})` : "?");
 const chipFor = (s: string) => (s === "paid" || s === "sent" ? "chip-ok" : s === "denied" || s === "failed" || s === "cancelled" ? "chip-bad" : "chip-gold");
 
-export default function GovClient() {
+export default function GovClient({ owner }: { owner: boolean }) {
   const [tab, setTab] = useState<Tab>("overview");
   const [sub, setSub] = useState("pending");
   const [msg, setMsg] = useState("");
@@ -201,6 +201,7 @@ export default function GovClient() {
             {label}
           </button>
         ))}
+        {owner && <a href="/owner-security" className="pill whitespace-nowrap">Security</a>}
       </div>
 
       {showSubs && (
