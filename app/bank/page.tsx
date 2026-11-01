@@ -12,7 +12,7 @@ export default async function BankPage() {
   for (const b of data ?? []) balances[b.resource] = Number(b.balance);
   return (
     <>
-      <BankClient balances={balances} />
+      <BankClient balances={balances} staff={me.staff} />
       <Nav staff={me.staff} />
     </>
   );

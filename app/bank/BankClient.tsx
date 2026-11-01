@@ -25,11 +25,11 @@ const STATUS_TEXT: Record<string, string> = {
 const chipFor = (s: string) =>
   s === "sent" ? "chip-ok" : s === "failed" || s === "denied" ? "chip-bad" : "chip-gold";
 
-export default function BankClient({ balances }: { balances: Record<string, number> }) {
+export default function BankClient({ balances, staff }: { balances: Record<string, number>; staff: boolean }) {
   const [amounts, setAmounts] = useState<AmountText>({});
   const [list, setList] = useState<W[] | null>(null);
   const [recipient, setRecipient] = useState("");
-  const [tag, setTag] = useState<"DEPOSIT" | "GRANT" | "">("");
+  const [tag, setTag] = useState<"DEPOSIT" | "GRANT" | "IGNORE" | "">("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -50,7 +50,7 @@ export default function BankClient({ balances }: { balances: Record<string, numb
   async function submit() {
     setMsg("");
     if (!tag) {
-      setMsg("Choose a tag: DEPOSIT or GRANT");
+      setMsg("Choose a tag: DEPOSIT, GRANT, or IGNORE");
       return;
     }
     const parsed = toAmounts(amounts);
@@ -149,10 +149,10 @@ export default function BankClient({ balances }: { balances: Record<string, numb
         <p className="mb-2 text-[11px] text-[var(--muted)]">
           <strong>DEPOSIT</strong> deducts your site balance and pays from offshore automatically.
           <strong> GRANT</strong> does not deduct deposit — staff approve, then it auto-sends from offshore.
-          IGNORE is staff-only.
+          {staff ? " IGNORE is available to Econ staff." : ""}
         </p>
         <div className="mb-3 grid grid-cols-2 gap-2">
-          {(["DEPOSIT", "GRANT"] as const).map((t) => (
+          {(["DEPOSIT", "GRANT", ...(staff ? ["IGNORE" as const] : [])] as const).map((t) => (
             <button
               key={t}
               type="button"
