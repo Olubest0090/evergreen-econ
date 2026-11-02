@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { syncBankDeposits } from "@/lib/bankDeposits";
+import { syncBankrecs } from "@/lib/bankrecs";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) return true; // allow if not set (still prefer setting it)
+  if (!secret) return true;
   const url = new URL(req.url);
   return (
     req.headers.get("authorization") === `Bearer ${secret}` ||
@@ -19,13 +19,14 @@ export async function GET(req: Request) {
   if (!authorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
   try {
-    const result = await syncBankDeposits();
+    const result = await syncBankrecs({ minIntervalMs: 120_000 });
     return NextResponse.json({ ok: true, ...result });
-  } catch (e) {
-    console.error("bank-deposits cron:", e);
+  } catch (error) {
+    console.error("bank-deposits cron:", error);
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Sync failed" },
+      { error: error instanceof Error ? error.message : "Sync failed" },
       { status: 502 }
     );
   }

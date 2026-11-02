@@ -3,7 +3,7 @@ import { db } from "@/lib/supabase";
 import { setSession } from "@/lib/session";
 import { exchangeCode, fetchGuildMember, fetchUser, normName } from "@/lib/discord";
 import { fetchAllianceNations } from "@/lib/pnw";
-import { syncDepositsForNation } from "@/lib/bankDeposits";
+import { syncBankrecs } from "@/lib/bankrecs";
 
 type Alliance = { alliance_id: number | null; guild_id: string | null };
 type Roles = { guild_id: string | null; role_ids: string[] };
@@ -12,9 +12,9 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const origin = process.env.SITE_URL || url.origin;
   const fail = (code: string) => {
-    const r = NextResponse.redirect(new URL(`/login?error=${code}`, origin));
-    r.cookies.delete("econ_oauth");
-    return r;
+    const response = NextResponse.redirect(new URL(`/login?error=${code}`, origin));
+    response.cookies.delete("econ_oauth");
+    return response;
   };
 
   try {
@@ -33,36 +33,23 @@ export async function GET(req: Request) {
       .from("econ_settings")
       .select("key, value")
       .in("key", ["alliance", "econ_staff_roles", "member_roles"]);
-    const alliance = (rows?.find((r) => r.key === "alliance")?.value ?? {}) as Alliance;
-    const roleCfg = (rows?.find((r) => r.key === "econ_staff_roles")?.value ?? {}) as Roles;
-    const memberCfg = (rows?.find((r) => r.key === "member_roles")?.value ?? {}) as Roles;
+    const alliance = (rows?.find((row) => row.key === "alliance")?.value ?? {}) as Alliance;
+    const roleCfg = (rows?.find((row) => row.key === "econ_staff_roles")?.value ?? {}) as Roles;
+    const memberCfg = (rows?.find((row) => row.key === "member_roles")?.value ?? {}) as Roles;
     if (!alliance.alliance_id || !alliance.guild_id) return fail("setup");
 
-    const member = await fetchGuildMember(token, alliance.guild_id);
-    if (!member) return fail("not_in_server");
-    const staff = (roleCfg.role_ids ?? []).some((id) => member.roles.includes(String(id)));
-    // Everyone who uses the site needs the Member role (econ staff count as members).
-    const isMember = (memberCfg.role_ids ?? []).some((id) => member.roles.includes(String(id)));
+    const guildMember = await fetchGuildMember(token, alliance.guild_id);
+    if (!guildMember) return fail("not_in_server");
+    const staff = (roleCfg.role_ids ?? []).some((id) => guildMember.roles.includes(String(id)));
+    const isMember = (memberCfg.role_ids ?? []).some((id) => guildMember.roles.includes(String(id)));
     if (!staff && !isMember) return fail("not_member");
 
-    // Search both the main alliance and offshore alliance.
-    const allianceIds = [...new Set([
-      Number(alliance.alliance_id),
-      15718,
-    ])];
-
-    const nationGroups = await Promise.all(
-      allianceIds.map((id) => fetchAllianceNations(id))
-    );
-
+    const allianceIds = [...new Set([Number(alliance.alliance_id), 15718])];
+    const nationGroups = await Promise.all(allianceIds.map((id) => fetchAllianceNations(id)));
     const nations = nationGroups.flat();
 
-    // Match the player's Discord name.
     const mine = normName(user.username);
-    const matches = nations.filter(
-      (n) => n.discord && normName(n.discord) === mine
-    );
-
+    const matches = nations.filter((nation) => nation.discord && normName(nation.discord) === mine);
     if (matches.length === 0) return fail("no_nation");
     if (matches.length > 1) return fail("ambiguous");
     const nation = matches[0];
@@ -73,7 +60,7 @@ export async function GET(req: Request) {
       .select("id, status")
       .or(`discord_id.eq.${user.id},nation_id.eq.${nation.id}`)
       .limit(2);
-    if (existing?.some((m) => m.status === "suspended")) return fail("suspended");
+    if (existing?.some((member) => member.status === "suspended")) return fail("suspended");
 
     const { error } = await supa.from("econ_members").upsert(
       {
@@ -94,18 +81,17 @@ export async function GET(req: Request) {
 
     await setSession(user.id, staff);
 
-    // Credit any in-game deposits for this nation + DM (same as auto bankrec path)
-    try {
-      void syncDepositsForNation(Number(nation.id));
-    } catch (e) {
-      console.error("post-login deposit sync:", e);
-    }
+    // The pending-aware sync claims deposits previously held for this nation.
+    // It also keeps the main and offshore bank cursors in one idempotent sync path.
+    void syncBankrecs({ force: true }).catch((error) => {
+      console.error("post-login pending deposit claim:", error);
+    });
 
-    const res = NextResponse.redirect(new URL("/", origin));
-    res.cookies.delete("econ_oauth");
-    return res;
-  } catch (e) {
-    console.error("discord callback error:", e);
+    const response = NextResponse.redirect(new URL("/", origin));
+    response.cookies.delete("econ_oauth");
+    return response;
+  } catch (error) {
+    console.error("discord callback error:", error);
     return fail("server");
   }
 }
