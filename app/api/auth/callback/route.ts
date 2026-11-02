@@ -45,10 +45,24 @@ export async function GET(req: Request) {
     const isMember = (memberCfg.role_ids ?? []).some((id) => member.roles.includes(String(id)));
     if (!staff && !isMember) return fail("not_member");
 
-    // The Discord name the player typed on their P&W nation must match this Discord account.
-    const nations = await fetchAllianceNations(alliance.alliance_id);
+    // Search both the main alliance and offshore alliance.
+    const allianceIds = [...new Set([
+      Number(alliance.alliance_id),
+      15718,
+    ])];
+
+    const nationGroups = await Promise.all(
+      allianceIds.map((id) => fetchAllianceNations(id))
+    );
+
+    const nations = nationGroups.flat();
+
+    // Match the player's Discord name.
     const mine = normName(user.username);
-    const matches = nations.filter((n) => n.discord && normName(n.discord) === mine);
+    const matches = nations.filter(
+      (n) => n.discord && normName(n.discord) === mine
+    );
+
     if (matches.length === 0) return fail("no_nation");
     if (matches.length > 1) return fail("ambiguous");
     const nation = matches[0];
