@@ -4,6 +4,7 @@ import { setSession } from "@/lib/session";
 import { exchangeCode, fetchGuildMember, fetchUser, normName } from "@/lib/discord";
 import { fetchAllianceNations } from "@/lib/pnw";
 import { syncBankrecs } from "@/lib/bankrecs";
+import { claimLocutusPendingForNation } from "@/lib/locutusPending";
 
 type Alliance = { alliance_id: number | null; guild_id: string | null };
 type Roles = { guild_id: string | null; role_ids: string[] };
@@ -58,7 +59,7 @@ export async function GET(req: Request) {
     const { data: existing } = await supa
       .from("econ_members")
       .select("id, status")
-      .or(`discord_id.eq.${user.id},nation_id.eq.${nation.id}`)
+      .or(`discord_id.eq.\( {user.id},nation_id.eq. \){nation.id}`)
       .limit(2);
     if (existing?.some((member) => member.status === "suspended")) return fail("suspended");
 
@@ -79,10 +80,22 @@ export async function GET(req: Request) {
       return fail("server");
     }
 
+    // Claim Locutus sheet deposits held while unregistered
+    const { data: mem } = await supa
+      .from("econ_members")
+      .select("id")
+      .eq("nation_id", Number(nation.id))
+      .maybeSingle();
+
+    if (mem?.id) {
+      void claimLocutusPendingForNation(Number(nation.id), mem.id).catch((e) =>
+        console.error("locutus pending claim:", e)
+      );
+    }
+
     await setSession(user.id, staff);
 
-    // The pending-aware sync claims deposits previously held for this nation.
-    // It also keeps the main and offshore bank cursors in one idempotent sync path.
+    // Live bankrec + pending bank deposits
     void syncBankrecs({ force: true }).catch((error) => {
       console.error("post-login pending deposit claim:", error);
     });
