@@ -19,7 +19,7 @@ async function call(body: Record<string, unknown>) {
 }
 
 
-type Books = { baseline: Record<string, number>; credits: Record<string, number>; debits: Record<string, number>; net: Record<string, number>; canConfigure: boolean };
+type Books = { net: Record<string, number> };
 
 function BooksCard() {
   const [books, setBooks] = useState<Books | null>(null);
@@ -29,53 +29,28 @@ function BooksCard() {
     const res = await fetch("/api/gov/books", { cache: "no-store" });
     const j = await res.json().catch(() => ({}));
     if (res.ok) setBooks(j as Books);
-    else setMsg(j.error || "Could not load the books");
+    else setMsg(j.error || "Could not load the net");
   }, []);
+
   useEffect(() => { void load(); }, [load]);
-
-  async function post(body: Record<string, unknown>, ok: string) {
-    setMsg("");
-    const res = await fetch("/api/gov/books", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) { setMsg(j.error || "Failed"); return; }
-    setMsg(ok);
-    await load();
-  }
-
-  function ask(): Record<string, number> | null {
-    const resource = (window.prompt(`Resource (${RESOURCES.join(", ")}):`, "money") || "").trim().toLowerCase();
-    if (!resource) return null;
-    const raw = window.prompt("Amount (for example 5b, 250m):");
-    const n = raw ? parseAmount(raw) : null;
-    if (!n || n <= 0) { setMsg("That amount isn't valid."); return null; }
-    return { [resource]: n };
-  }
 
   return (
     <div className="card space-y-2">
       <h3 className="font-semibold">Evergreen net at offshore</h3>
       <p className="text-[11px] text-[var(--muted)]">
-        Baseline + what Evergreen moved in − what was paid out of the offshore. This is not the offshore bank&apos;s balance, which also holds other alliances&apos; money, and it never includes anyone&apos;s personal stockpile.
+        This is not the offshore bank&apos;s balance, and it never includes anyone&apos;s personal stockpile.
       </p>
+
       {!books && <p className="text-xs text-[var(--muted)]">Loading…</p>}
+
       {books && (
         <div className="space-y-1 text-xs">
-          <p className="text-sm font-semibold">Net: {Object.keys(books.net).length ? describe(books.net) : "nothing yet"}</p>
-          <p><span className="text-[var(--muted)]">Baseline:</span> {describe(books.baseline)}</p>
-          <p><span className="text-[var(--muted)]">Moved in:</span> {describe(books.credits)}</p>
-          <p><span className="text-[var(--muted)]">Paid out:</span> {describe(books.debits)}</p>
+          <p className="text-sm font-semibold">
+            Net: {Object.keys(books.net).length ? describe(books.net) : "nothing yet"}
+          </p>
         </div>
       )}
-      {books?.canConfigure && (
-        <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn-ghost" onClick={() => { const a = ask(); if (a) void post({ action: "credit", amounts: a, note: window.prompt("Note (optional):") ?? "" }, "Credit added."); }}>Add credit</button>
-          <button type="button" className="btn-ghost" onClick={() => { const a = ask(); if (a) void post({ action: "debit", amounts: a, note: window.prompt("Note (optional):") ?? "" }, "Debit added."); }}>Add debit</button>
-          <button type="button" className="btn-ghost" onClick={() => {
-            const a = ask();
-            if (a && window.confirm("Replace the whole baseline with just this amount?")) void post({ action: "baseline", amounts: a }, "Baseline set.");
-          }}>Set baseline</button>
-        </div>
-      )}
+
       {msg && <p className="text-xs text-[var(--accent)]">{msg}</p>}
     </div>
   );
