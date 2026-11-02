@@ -5,6 +5,7 @@ import { PERMS, requireStaff } from "@/lib/auth";
 import crypto from "crypto";
 import { cleanAmounts, isResource, parseAmount } from "@/lib/resources";
 import { parseNumber, readSheet } from "@/lib/sheet";
+import { planLocutusImport, applyLocutusImport } from "@/lib/locutusImport";
 import { fetchSheetCsv } from "@/lib/gsheet";
 import { fetchAllianceHoldings, fetchLatestMarketPrices } from "@/lib/pnw";
 import { makeDepositCode, sendDepositConfirmation } from "@/lib/depositNotify";
@@ -36,63 +37,22 @@ type Plan = {
   rowCount: number;
 };
 
-/** Works out what each member's balance would change by, from a pasted Locutus sheet. */
-async function planImport(supa: ReturnType<typeof db>, csv: string, mode: string): Promise<{ plan: Plan } | { error: string }> {
-  const parsed = readSheet(csv);
-  if (!parsed.ok) return { error: parsed.error };
-  const { sheet } = parsed;
-
-  const { data: members } = await supa
-    .from("econ_members")
-    .select("id, nation_id, nation_name, leader_name")
-    .limit(3000);
-  const byId = new Map<number, { id: string; label: string }>();
-  const byName = new Map<string, { id: string; label: string } | null>();
-  for (const m of members ?? []) {
-    const label = `${m.leader_name ?? m.nation_name} (#${m.nation_id})`;
-    byId.set(Number(m.nation_id), { id: m.id, label });
-    for (const n of [m.nation_name, m.leader_name]) {
-      const key = String(n ?? "").trim().toLowerCase();
-      if (!key) continue;
-      byName.set(key, byName.has(key) && byName.get(key)?.id !== m.id ? null : { id: m.id, label });
-    }
-  }
-
-  const { data: bal } = await supa.from("econ_balances").select("member_id, resource, balance").limit(20000);
-  const current = new Map<string, number>();
-  for (const b of bal ?? []) current.set(`${b.member_id}|${b.resource}`, Number(b.balance));
-
-  const plan: Plan = { matched: [], unmatched: [], errors: [], resources: sheet.resCols.map((c) => c.resource), rowCount: sheet.rows.length };
-  const seen = new Set<string>();
-
-  sheet.rows.forEach((row, i) => {
-    const idText = sheet.idCol >= 0 ? (row[sheet.idCol] ?? "").replace(/\D/g, "") : "";
-    const nameText = sheet.nameCol >= 0 ? (row[sheet.nameCol] ?? "").trim() : "";
-    const hit = idText ? byId.get(Number(idText)) : byName.get(nameText.toLowerCase());
-    const who = idText ? `#${idText}` : nameText || `row ${i + 2}`;
-    if (!hit) {
-      if (idText || nameText) plan.unmatched.push(who);
-      return;
-    }
-    if (seen.has(hit.id)) {
-      plan.errors.push(`${hit.label} appears more than once. Only the first row was used.`);
-      return;
-    }
-    seen.add(hit.id);
-
-    const deltas: Record<string, number> = {};
-    for (const { col, resource } of sheet.resCols) {
-      const v = parseNumber(row[col] ?? "");
-      if (v === null) continue; // blank cells are left alone
-      if (Number.isNaN(v)) {
-        plan.errors.push(`${hit.label}: "${row[col]}" is not a number (${resource}).`);
-        continue;
-      }
-      const delta = mode === "add" ? v : v - (current.get(`${hit.id}|${resource}`) ?? 0);
-      if (Math.abs(delta) >= 0.005) deltas[resource] = Math.round(delta * 100) / 100;
-    }
-    if (Object.keys(deltas).length) plan.matched.push({ memberId: hit.id, label: hit.label, deltas });
-  });
+/** Locutus sheet plan — registered + pending (unregistered nation IDs). */
+async function planImport(supa: ReturnType<typeof db>, csv: string, mode: string): Promise<{ plan: Plan & { pending?: { nationId: number; label: string; deltas: Record<string, number> }[] } } | { error: string }> {
+  const built = await planLocutusImport(csv, mode);
+  if ("error" in built) return built;
+  const { plan: lp } = built;
+  const plan = {
+    matched: lp.matched.map((m) => ({ memberId: m.memberId, label: m.label, deltas: m.deltas })),
+    unmatched: [
+      ...lp.pending.map((p) => `${p.label} (pending until login)`),
+      ...lp.unmatched,
+    ],
+    errors: lp.errors,
+    resources: lp.resources,
+    rowCount: lp.rowCount,
+    pending: lp.pending,
+  };
   return { plan };
 }
 
@@ -346,6 +306,41 @@ export async function POST(req: Request) {
   const action = String(body.action || "");
   const supa = db();
   const bad = (m: string, s = 400) => NextResponse.json({ error: m }, { status: s });
+
+
+  if (action === "import_locutus" || action === "import") {
+    if (!staff.can("balances") && !staff.can("members") && !staff.can("requests")) return noPerm();
+    const mode = String(body.mode || "add");
+    let csv = String(body.csv || body.text || body.sheet || "");
+    if (!csv.trim() && body.url) {
+      try {
+        csv = await fetchSheetCsv(String(body.url));
+      } catch (e) {
+        return bad(e instanceof Error ? e.message : "Could not fetch sheet");
+      }
+    }
+    if (!csv.trim()) return bad("Paste the sheet or provide a Google Sheet link");
+    // Preview only
+    if (body.preview === true || body.dryRun === true) {
+      const built = await planImport(supa, csv, mode === "match" ? "match" : "add");
+      if ("error" in built) return bad(built.error);
+      return NextResponse.json({ ok: true, ...built.plan, pending: (built.plan as { pending?: unknown }).pending });
+    }
+    const applied = await applyLocutusImport({
+      csv,
+      mode: mode === "match" ? "match" : "add",
+      staffDiscordId: staff.discordId,
+    });
+    if ("error" in applied) return bad(applied.error, 500);
+    return NextResponse.json({
+      ok: true,
+      members: applied.members,
+      entries: applied.entries,
+      pendingNations: applied.pendingNations,
+      pendingRows: applied.pendingRows,
+      batch: applied.batch,
+    });
+  }
 
   if (action === "decide") {
     if (!staff.can("requests")) return noPerm();
