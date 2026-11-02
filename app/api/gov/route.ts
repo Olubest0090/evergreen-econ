@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { cleanAmounts, isResource, parseAmount } from "@/lib/resources";
 import { parseNumber, readSheet } from "@/lib/sheet";
 import { fetchSheetCsv } from "@/lib/gsheet";
-import { fetchAllianceHoldings } from "@/lib/pnw";
+import { fetchAllianceHoldings, fetchLatestMarketPrices } from "@/lib/pnw";
 import { makeDepositCode, sendDepositConfirmation } from "@/lib/depositNotify";
 
 export const dynamic = "force-dynamic";
@@ -189,7 +189,7 @@ export async function GET(req: Request) {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const head = (table: string, col: string, val: string) =>
       supa.from(table).select("id", { count: "exact", head: true }).eq(col, val);
-    const [pr, ar, pw, aw, mc, bal, dep, paid, sent] = await Promise.all([
+    const [pr, ar, pw, aw, mc, bal, dep, paid, sent, market] = await Promise.all([
       head("econ_requests", "status", "pending"),
       head("econ_requests", "status", "approved"),
       head("econ_withdrawals", "status", "pending_approval"),
@@ -199,6 +199,10 @@ export async function GET(req: Request) {
       supa.from("econ_ledger").select("resource, amount").eq("kind", "deposit").gte("created_at", since).limit(20000),
       supa.from("econ_requests").select("kind, amounts").eq("status", "paid").gte("paid_at", since).limit(5000),
       supa.from("econ_withdrawals").select("amounts").eq("status", "sent").gte("sent_at", since).limit(5000),
+      fetchLatestMarketPrices().catch((error) => {
+        console.error("Market price lookup failed:", error);
+        return null;
+      }),
     ]);
     const add = (t: Record<string, number>, k: string, v: number) => { t[k] = Math.round(((t[k] ?? 0) + v) * 100) / 100; };
     const held: Record<string, number> = {};
@@ -209,10 +213,23 @@ export async function GET(req: Request) {
     for (const r of paid.data ?? []) for (const [k, v] of Object.entries((r.amounts ?? {}) as Record<string, number>)) add(grants, k, Number(v));
     const withdrawn: Record<string, number> = {};
     for (const w of sent.data ?? []) for (const [k, v] of Object.entries((w.amounts ?? {}) as Record<string, number>)) add(withdrawn, k, Number(v));
+
+    const marketPrices = market?.prices ?? null;
+
+    const heldMarketValue = marketPrices
+      ? Object.entries(held).reduce((total, [resource, amount]) => {
+          const price = Number(marketPrices[resource]);
+          return total + (Number.isFinite(price) ? Number(amount) * price : 0);
+        }, 0)
+      : null;
+
     return NextResponse.json({
       pendingRequests: pr.count ?? 0, toSendRequests: ar.count ?? 0,
       pendingWithdrawals: pw.count ?? 0, toSendWithdrawals: aw.count ?? 0,
       members: mc.count ?? 0, held, deposits, grants, withdrawn,
+      heldMarketValue,
+      marketPrices,
+      marketPriceDate: market?.date ?? null,
     });
   }
 

@@ -30,6 +30,9 @@ type Tab = "overview" | "requests" | "withdrawals" | "members" | "import" | "aud
 type Overview = {
   pendingRequests: number; toSendRequests: number; pendingWithdrawals: number; toSendWithdrawals: number; members: number;
   held: Record<string, number>; deposits: Record<string, number>; grants: Record<string, number>; withdrawn: Record<string, number>;
+  heldMarketValue: number | null;
+  marketPrices: Record<string, number> | null;
+  marketPriceDate: string | null;
 };
 type AuditRow = { nationId: number; nation: string; leader: string; cities: number; registered: boolean; known: boolean; missing: Record<string, number> };
 type Audit = { targetActive: boolean; holdingsKnown: boolean; total: number; under: AuditRow[]; unknown: number; notRegistered: string[] };
@@ -237,6 +240,19 @@ export default function GovClient({ owner }: { owner: boolean }) {
               <div className="card space-y-2 text-xs">
                 <p><span className="text-[var(--muted)]">Members on the site:</span> {overview.members}</p>
                 <p><span className="text-[var(--muted)]">Held in member balances:</span> {describe(overview.held)}</p>
+                <div className="rounded-lg border border-[var(--border)] p-3">
+                  <p className="text-[var(--muted)]">Total market value of member balances</p>
+                  <p className="text-xl font-bold">
+                    {overview.heldMarketValue === null
+                      ? "Market prices unavailable"
+                      : `$${fmt(overview.heldMarketValue)}`}
+                  </p>
+                  <p className="text-[10px] text-[var(--muted)]">
+                    Based on P&W daily average market prices
+                    {overview.marketPriceDate ? ` (${overview.marketPriceDate})` : ""}.
+                    Money is valued at $1 per unit.
+                  </p>
+                </div>
                 <p><span className="text-[var(--muted)]">Deposited, last 30 days:</span> {describe(overview.deposits)}</p>
                 <p><span className="text-[var(--muted)]">Grants and support paid, last 30 days:</span> {describe(overview.grants)}</p>
                 <p><span className="text-[var(--muted)]">Withdrawn, last 30 days:</span> {describe(overview.withdrawn)}</p>

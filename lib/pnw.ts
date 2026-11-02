@@ -47,6 +47,52 @@ export async function fetchCities(nationId: number): Promise<number | null> {
 
 export type PnwHolding = PnwNation & { resources: Record<string, number> | null };
 
+export type PnwMarketPrices = {
+  date: string | null;
+  prices: Record<string, number>;
+};
+
+/**
+ * Gets the latest published daily average market prices from P&W.
+ */
+export async function fetchLatestMarketPrices(): Promise<PnwMarketPrices> {
+  const data = await gql<{
+    tradeprices: {
+      data: (Record<string, number | string | null> & { date?: string | null })[];
+    };
+  }>(
+    `query {
+      tradeprices(first: 1, page: 1) {
+        data {
+          date food coal oil uranium lead iron bauxite
+          gasoline munitions steel aluminum
+        }
+      }
+    }`,
+    {}
+  );
+
+  const latest = data.tradeprices?.data?.[0];
+  if (!latest) throw new Error("P&W did not return market prices");
+
+  const prices: Record<string, number> = { money: 1 };
+
+  for (const resource of RES) {
+    if (resource === "money") continue;
+
+    const price = Number(latest[resource]);
+
+    if (Number.isFinite(price) && price >= 0) {
+      prices[resource] = price;
+    }
+  }
+
+  return {
+    date: latest.date ? String(latest.date) : null,
+    prices,
+  };
+}
+
 const RES = ["money", "food", "coal", "oil", "uranium", "lead", "iron", "bauxite", "gasoline", "munitions", "steel", "aluminum"];
 
 /** Alliance nations with what each one is holding. Resources are null if the API won't show them. */
