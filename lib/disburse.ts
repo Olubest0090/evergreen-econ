@@ -1,9 +1,9 @@
 /**
- * Tax-bracket disburse (Locutus-style):
- * - Nations on a given in-game tax_id
- * - Need = warchest target − current holdings (what they still need)
- * - Default period 7d (targets already represent operating stock; we use full target gap)
- * - Send from OFFSHORE only, bank note always "Grant"
+ * Tax-bracket disburse (Locutus /transfer raws style):
+ * For each nation on the tax ID:
+ *   daily_consumption(nation) × days
+ * Optionally top-up only: max(0, need − stockpile) when holdings are visible.
+ * Bank: offshore only. Note: always "Grant".
  */
 import { db } from "@/lib/supabase";
 import { getSetting } from "@/lib/settings";
@@ -17,9 +17,9 @@ export type DisburseRow = {
   leaderName: string;
   cities: number;
   taxId: number | null;
-  target: Record<string, number>;
-  holdings: Record<string, number> | null;
+  daily: Record<string, number>;
   need: Record<string, number>;
+  holdings: Record<string, number> | null;
   skipped?: string;
 };
 
@@ -41,7 +41,16 @@ async function gql<T>(query: string, variables: Record<string, unknown>): Promis
   return json.data as T;
 }
 
-const RES_FIELDS = RESOURCES.join(" ");
+type City = {
+  infrastructure?: number | null;
+  land?: number | null;
+  date?: string | null;
+  coal_power?: number | null;
+  oil_power?: number | null;
+  nuclear_power?: number | null;
+  wind_power?: number | null;
+  farms?: number | null;
+};
 
 type NationRow = {
   id: string;
@@ -50,50 +59,40 @@ type NationRow = {
   num_cities: number;
   alliance_position: string | null;
   tax_id?: number | string | null;
+  population?: number | null;
+  soldiers?: number | null;
+  tanks?: number | null;
+  aircraft?: number | null;
+  ships?: number | null;
+  cities?: City[] | null;
 } & Partial<Record<(typeof RESOURCES)[number], number | null>>;
 
-/** Alliance nations, optional tax_id filter (client-side if API ignores tax_id). */
+const RES_FIELDS = RESOURCES.join(" ");
+
 export async function fetchAllianceNationsForTax(
   allianceId: number,
   taxId: number
 ): Promise<NationRow[]> {
-  // Request tax_id + resources; filter to tax bracket
-  try {
-    const data = await gql<{ nations: { data: NationRow[] } }>(
-      `query($a:[Int],$first:Int){
-        nations(alliance_id:$a, first:$first){
-          data {
-            id nation_name leader_name num_cities alliance_position tax_id
-            ${RES_FIELDS}
+  const data = await gql<{ nations: { data: NationRow[] } }>(
+    `query($a:[Int],$first:Int){
+      nations(alliance_id:$a, first:$first){
+        data {
+          id nation_name leader_name num_cities alliance_position tax_id
+          population soldiers tanks aircraft ships
+          ${RES_FIELDS}
+          cities {
+            infrastructure land date
+            coal_power oil_power nuclear_power wind_power farms
           }
         }
-      }`,
-      { a: [allianceId], first: 500 }
-    );
-    return (data.nations.data || []).filter((n) => {
-      const tid = n.tax_id != null ? Number(n.tax_id) : null;
-      return tid === taxId;
-    });
-  } catch (e) {
-    // tax_id field may not exist on some keys — fall back without it
-    const msg = e instanceof Error ? e.message : "";
-    if (!/tax_id/i.test(msg)) throw e;
-    const data = await gql<{ nations: { data: NationRow[] } }>(
-      `query($a:[Int],$first:Int){
-        nations(alliance_id:$a, first:$first){
-          data {
-            id nation_name leader_name num_cities alliance_position
-            ${RES_FIELDS}
-          }
-        }
-      }`,
-      { a: [allianceId], first: 500 }
-    );
-    // Without tax_id we cannot filter — return empty with clear error upstream
-    throw new Error(
-      "P&W API did not return tax_id on nations. Use an alliance key that can see tax brackets, or update the query."
-    );
-  }
+      }
+    }`,
+    { a: [allianceId], first: 500 }
+  );
+  return (data.nations.data || []).filter((n) => {
+    const tid = n.tax_id != null ? Number(n.tax_id) : null;
+    return tid === taxId;
+  });
 }
 
 function holdingsOf(n: NationRow): Record<string, number> | null {
@@ -109,16 +108,84 @@ function holdingsOf(n: NationRow): Record<string, number> | null {
   return known ? out : null;
 }
 
-function needFrom(
-  target: Record<string, number>,
+function dailyConsumption(n: NationRow): Record<string, number> {
+  const daily: Record<string, number> = {};
+  const cities = n.cities || [];
+  const soldiers = Number(n.soldiers ?? 0);
+  const tanks = Number(n.tanks ?? 0);
+  const aircraft = Number(n.aircraft ?? 0);
+  const ships = Number(n.ships ?? 0);
+
+  let food = 0;
+  if (cities.length) {
+    const now = Date.now();
+    for (const c of cities) {
+      const infra = Number(c.infrastructure ?? 0);
+      const basePop = infra * 100;
+      const ageDays = c.date
+        ? Math.max(1, (now - new Date(c.date).getTime()) / 86_400_000)
+        : 30;
+      const ageMod = 1 + Math.max(Math.log(ageDays) / 15, 0);
+      food +=
+        (basePop * basePop) / 125_000_000 +
+        (basePop * ageMod - basePop) / 850;
+    }
+  } else {
+    const pop = Number(n.population ?? 0);
+    if (pop > 0) {
+      food += (pop * pop) / 125_000_000 + pop / 850;
+    } else {
+      food += Number(n.num_cities ?? 0) * 80;
+    }
+  }
+  food += soldiers / 750;
+  if (food > 0.01) daily.food = Math.round(food * 100) / 100;
+
+  let coal = 0;
+  let oil = 0;
+  let uranium = 0;
+  for (const c of cities) {
+    const infra = Math.max(Number(c.infrastructure ?? 0), 1);
+    const coalP = Number(c.coal_power ?? 0);
+    const oilP = Number(c.oil_power ?? 0);
+    const nucP = Number(c.nuclear_power ?? 0);
+    coal += coalP * (infra / 1000) * 1.5 * 12;
+    oil += oilP * (infra / 1000) * 1.5 * 12;
+    uranium += nucP * (infra / 1000) * 1.2 * 12;
+  }
+  if (coal > 0.01) daily.coal = Math.round(coal * 100) / 100;
+  if (oil > 0.01) daily.oil = Math.round(oil * 100) / 100;
+  if (uranium > 0.01) daily.uranium = Math.round(uranium * 100) / 100;
+
+  if (!cities.length && Number(n.num_cities ?? 0) > 0) {
+    const c = Number(n.num_cities);
+    daily.coal = Math.round(c * 2 * 100) / 100;
+    daily.uranium = Math.round(c * 0.5 * 100) / 100;
+  }
+
+  const gas = tanks * 0.001 + aircraft * 0.002 + ships * 0.01;
+  const munis = tanks * 0.001 + aircraft * 0.002 + ships * 0.01;
+  if (gas > 0.01) daily.gasoline = Math.round(gas * 100) / 100;
+  if (munis > 0.01) daily.munitions = Math.round(munis * 100) / 100;
+
+  return daily;
+}
+
+function needForDays(
+  daily: Record<string, number>,
+  days: number,
   holdings: Record<string, number> | null
 ): Record<string, number> {
   const need: Record<string, number> = {};
-  for (const [k, t] of Object.entries(target)) {
-    const have = holdings ? Number(holdings[k] ?? 0) : 0;
-    // If holdings unknown, disburse full target (safe "what they need" for 7d stock)
-    const gap = holdings ? Math.max(0, Number(t) - have) : Math.max(0, Number(t));
-    if (gap >= 0.005) need[k] = Math.round(gap * 100) / 100;
+  for (const [k, d] of Object.entries(daily)) {
+    const total = Math.round(d * days * 100) / 100;
+    if (total < 0.005) continue;
+    if (holdings) {
+      const gap = Math.max(0, total - Number(holdings[k] ?? 0));
+      if (gap >= 0.005) need[k] = Math.round(gap * 100) / 100;
+    } else {
+      need[k] = total;
+    }
   }
   return need;
 }
@@ -133,64 +200,28 @@ export async function previewDisburse(opts: {
   if (!allianceId) throw new Error("Main alliance ID is not set");
 
   const nations = await fetchAllianceNationsForTax(allianceId, opts.taxId);
-  const supa = db();
-  const [{ data: rule }, { data: overrides }] = await Promise.all([
-    supa
-      .from("econ_warchest_rules")
-      .select("base, per_city, active")
-      .eq("name", "Default")
-      .maybeSingle(),
-    supa.from("econ_warchest_overrides").select("nation_id, targets"),
-  ]);
-
-  const over = new Map<number, Record<string, number>>();
-  for (const o of overrides ?? []) {
-    over.set(Number(o.nation_id), (o.targets || {}) as Record<string, number>);
-  }
-  const base = (rule?.base ?? {}) as Record<string, number>;
-  const perCity = (rule?.per_city ?? {}) as Record<string, number>;
-  const ruleActive = !!rule?.active;
-
-  // Scale: targets are typically "full warchest"; for N days use days/7 of gap if days !== 7
-  const scale = days / 7;
-
   const rows: DisburseRow[] = [];
+
   for (const n of nations) {
     if ((n.alliance_position || "").toUpperCase() === "APPLICANT") continue;
     const nationId = Number(n.id);
-    const cities = Number(n.num_cities ?? 0);
-    let target: Record<string, number> = {};
-    if (over.has(nationId)) {
-      target = { ...over.get(nationId)! };
-    } else if (ruleActive) {
-      for (const k of RESOURCES) {
-        const v = Number(base[k] ?? 0) + Number(perCity[k] ?? 0) * cities;
-        if (v > 0) target[k] = Math.round(v * 100) / 100;
-      }
-    }
-    // apply day scale
-    if (scale !== 1) {
-      for (const k of Object.keys(target)) {
-        target[k] = Math.round(target[k] * scale * 100) / 100;
-      }
-    }
-
     const holdings = holdingsOf(n);
-    const need = needFrom(target, holdings);
+    const daily = dailyConsumption(n);
+    const need = needForDays(daily, days, holdings);
     const row: DisburseRow = {
       nationId,
       nationName: n.nation_name,
       leaderName: n.leader_name,
-      cities,
+      cities: Number(n.num_cities ?? 0),
       taxId: n.tax_id != null ? Number(n.tax_id) : opts.taxId,
-      target,
+      daily,
       holdings,
       need,
     };
-    if (!Object.keys(target).length) {
-      row.skipped = "No warchest target for this nation";
+    if (!Object.keys(daily).length) {
+      row.skipped = "Could not estimate daily consumption";
     } else if (!Object.keys(need).length) {
-      row.skipped = "Already at or above target";
+      row.skipped = `Already has ≥ ${days}d of estimated consumption`;
     }
     rows.push(row);
   }
@@ -202,7 +233,7 @@ export async function previewDisburse(opts: {
 export async function runDisburse(opts: {
   taxId: number;
   days?: number;
-  nationIds?: number[]; // optional subset
+  nationIds?: number[];
   staffDiscordId: string;
 }): Promise<{
   ok: true;
@@ -245,6 +276,7 @@ export async function runDisburse(opts: {
         taxId: opts.taxId,
         days: opts.days ?? 7,
         nationId: row.nationId,
+        daily: row.daily,
         amounts,
         record: result.id,
         note: "Grant",
