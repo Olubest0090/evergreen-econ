@@ -1,48 +1,27 @@
 import { db } from "@/lib/supabase";
-import { RESOURCES } from "@/lib/resources";
 
-/** Credit Locutus pending rows for a nation after they register. */
+/** Atomically claim Locutus rows for a nation before login completes. */
 export async function claimLocutusPendingForNation(
   nationId: number,
   memberId: string
 ): Promise<{ claimed: number; error?: string }> {
-  const supa = db();
-  const { data: rows, error } = await supa
-    .from("econ_locutus_pending")
-    .select("id, resource, amount, note, import_batch")
-    .eq("nation_id", nationId)
-    .is("claimed_at", null);
+  if (!Number.isSafeInteger(nationId) || nationId <= 0 || !memberId) {
+    return { claimed: 0, error: "Invalid nation or member ID." };
+  }
 
-  if (error) return { claimed: 0, error: error.message };
-  if (!rows?.length) return { claimed: 0 };
+  const { data, error } = await db().rpc(
+    "econ_claim_locutus_pending_for_nation",
+    { p_nation_id: nationId, p_member_id: memberId }
+  );
 
-  let claimed = 0;
-  for (const row of rows) {
-    const resource = String(row.resource);
-    if (!(RESOURCES as readonly string[]).includes(resource)) continue;
-    const amount = Number(row.amount);
-    if (!Number.isFinite(amount) || amount === 0) continue;
+  if (error) {
+    console.error("Locutus pending claim RPC failed:", error.message);
+    return { claimed: 0, error: error.message };
+  }
 
-    const { error: ledErr } = await supa.from("econ_ledger").insert({
-      member_id: memberId,
-      resource,
-      amount,
-      kind: "deposit",
-      note: row.note || `Locutus pending ${row.import_batch}`,
-      created_by: "system:locutus_pending",
-    });
-    if (ledErr) {
-      console.error("locutus claim ledger:", ledErr.message);
-      continue;
-    }
-    await supa
-      .from("econ_locutus_pending")
-      .update({
-        claimed_at: new Date().toISOString(),
-        claimed_member_id: memberId,
-      })
-      .eq("id", row.id);
-    claimed += 1;
+  const claimed = Number(data ?? 0);
+  if (!Number.isFinite(claimed) || claimed < 0) {
+    return { claimed: 0, error: "Invalid claim count returned by database." };
   }
   return { claimed };
 }

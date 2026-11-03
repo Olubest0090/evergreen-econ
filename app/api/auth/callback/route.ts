@@ -88,8 +88,18 @@ export async function GET(req: Request) {
       .maybeSingle();
 
     if (mem?.id) {
-      void claimLocutusPendingForNation(Number(nation.id), mem.id).catch((e) =>
-        console.error("locutus pending claim:", e)
+      const claim = await claimLocutusPendingForNation(
+        Number(nation.id),
+        mem.id
+      );
+
+      if (claim.error) {
+        console.error("Locutus pending claim failed:", claim.error);
+        return fail("balance_sync");
+      }
+
+      console.log(
+        `Locutus deposits claimed for nation #${nation.id}: ${claim.claimed} entries`
       );
     }
 
