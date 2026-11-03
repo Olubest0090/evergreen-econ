@@ -187,10 +187,14 @@ export default function GovClient({ owner }: { owner: boolean }) {
   };
   const TABS = ([
     ["overview", "Overview"], ["requests", "Requests"], ["withdrawals", "Withdrawals"], ["members", "Members"], ["import", "Import"],
-    ["audit", "Audit"], ["warchest", "Warchest"], ["taxes", "Taxes"], ["roles", "Roles"], ["log", "Log"], ["offshore", "Offshore"],
+    ["audit", "Audit"], ["warchest", "Warchest"], ["roles", "Roles"], ["log", "Log"], ["offshore", "Offshore"],
   ] as [Tab, string][]).filter(([k]) => allowed(k));
   const showSubs = tab === "requests" || tab === "withdrawals";
-  const SUBS: [string, string][] = [["pending", "Pending"], ["approved", "To send"], ["history", "History"]];
+  // Requests: pending (approve/deny) + history. Withdrawals are automatic — history only.
+  const SUBS: [string, string][] =
+    tab === "withdrawals"
+      ? [["history", "History"]]
+      : [["pending", "Pending"], ["history", "History"]];
 
   return (
     <main className="mx-auto min-h-screen max-w-2xl space-y-3 px-3 pb-24 pt-4 text-sm">
@@ -200,7 +204,7 @@ export default function GovClient({ owner }: { owner: boolean }) {
 
       <div className="no-scrollbar flex gap-2 overflow-x-auto">
         {TABS.map(([k, label]) => (
-          <button key={k} type="button" onClick={() => { setTab(k); setSub("pending"); setMsg(""); }} className={`pill ${tab === k ? "pill-on" : ""}`}>
+          <button key={k} type="button" onClick={() => { setTab(k); setSub(k === "withdrawals" ? "history" : "pending"); setMsg(""); }} className={`pill ${tab === k ? "pill-on" : ""}`}>
             {label}
           </button>
         ))}
@@ -227,17 +231,14 @@ export default function GovClient({ owner }: { owner: boolean }) {
           {overview && (
             <>
               <div className="grid grid-cols-2 gap-2">
-                {([
-                  ["Requests waiting", overview.pendingRequests, "requests"],
-                  ["Requests to send", overview.toSendRequests, "requests"],
-                  ["Withdrawals waiting", overview.pendingWithdrawals, "withdrawals"],
-                  ["Withdrawals to send", overview.toSendWithdrawals, "withdrawals"],
-                ] as [string, number, Tab][]).map(([label, n, go]) => (
-                  <button key={label} type="button" onClick={() => { setTab(go); setSub(label.includes("send") ? "approved" : "pending"); }} className="card text-left">
-                    <p className="text-[11px] text-[var(--muted)]">{label}</p>
-                    <p className="text-2xl font-bold">{n}</p>
-                  </button>
-                ))}
+                <button type="button" onClick={() => { setTab("requests"); setSub("pending"); }} className="card text-left">
+                  <p className="text-[11px] text-[var(--muted)]">Requests waiting</p>
+                  <p className="text-2xl font-bold">{overview.pendingRequests}</p>
+                </button>
+                <button type="button" onClick={() => { setTab("withdrawals"); setSub("history"); }} className="card text-left">
+                  <p className="text-[11px] text-[var(--muted)]">Withdrawal history</p>
+                  <p className="text-2xl font-bold text-[var(--muted)]">auto</p>
+                </button>
               </div>
               <div className="card space-y-2 text-xs">
                 <p><span className="text-[var(--muted)]">Members on the site:</span> {overview.members}</p>
@@ -319,7 +320,7 @@ export default function GovClient({ owner }: { owner: boolean }) {
               </div>
               {p.role === "staff" && (
                 <div className="grid grid-cols-2 gap-1.5 text-xs">
-                  {allPerms.map((perm) => (
+                  {allPerms.filter((perm) => perm !== "taxes" && perm !== "tax").map((perm) => (
                     <label key={perm} className="flex items-center gap-2">
                       <input
                         type="checkbox"
@@ -357,12 +358,9 @@ export default function GovClient({ owner }: { owner: boolean }) {
               <p className="text-[10.5px] text-[var(--muted)]">{new Date(r.created_at).toLocaleString()}</p>
               {r.status === "pending" && (
                 <div className="mt-2 flex gap-2">
-                  <button className="btn-ghost" onClick={() => run({ action: "decide", requestId: r.id, decision: "approve", note: askNote("Note for the member (optional):") }, "Approved. Send it in-game, then press Mark paid under To send.")}>Approve</button>
+                  <button className="btn-ghost" onClick={() => run({ action: "decide", requestId: r.id, decision: "approve", note: askNote("Note for the member (optional):") }, "Approved — sending automatically from offshore.")}>Approve</button>
                   <button className="btn-ghost btn-danger" onClick={() => run({ action: "decide", requestId: r.id, decision: "deny", note: askNote("Why is it denied?") }, "Denied")}>Deny</button>
                 </div>
-              )}
-              {r.status === "approved" && (
-                <button className="btn-ghost mt-2" onClick={() => run({ action: "paid", requestId: r.id, ref: askNote("Reference or note (optional):") }, "Marked as paid")}>Mark paid</button>
               )}
             </div>
           ))}
