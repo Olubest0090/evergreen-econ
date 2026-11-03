@@ -132,6 +132,40 @@ function TrackingCard() {
             if (!window.confirm("Only deposits made from this moment will be counted. Continue?")) return;
             await post({ action: "set_start", start: "now" }); setMsg("Tracking restarts from now."); await load();
           })}>Start counting from now</button>
+
+          <div className="space-y-2 rounded-xl border border-[var(--border)] p-2.5 mt-2">
+            <p className="text-[11px] font-semibold">Backfill one nation from offshore bankrecs</p>
+            <p className="text-[11px] text-[var(--muted)]">
+              Pulls that nation&apos;s deposits into the offshore and withdrawals out to them since a date,
+              nets them, and credits the site balance (e.g. Yema since 1 Nov).
+            </p>
+            <label className="block text-[11px] text-[var(--muted)]">
+              Nation ID
+              <input className="input mt-1" inputMode="numeric" id="bf-nation" placeholder="633226" defaultValue="633226" />
+            </label>
+            <label className="block text-[11px] text-[var(--muted)]">
+              Since (ISO date)
+              <input className="input mt-1" id="bf-since" defaultValue="2026-11-01T00:00:00.000Z" />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" className="btn-ghost" disabled={busy} onClick={() => wrap(async () => {
+                const nationId = Number((document.getElementById("bf-nation") as HTMLInputElement)?.value);
+                const since = (document.getElementById("bf-since") as HTMLInputElement)?.value || "2026-11-01T00:00:00.000Z";
+                const j = await post({ action: "offshore_backfill_preview", nationId, since });
+                setReport(JSON.stringify(j.preview, null, 2));
+                setMsg(`Preview: ${j.preview?.depositCount ?? 0} deposits, ${j.preview?.withdrawalCount ?? 0} withdrawals.`);
+              })}>Preview net</button>
+              <button type="button" className="btn-ghost" disabled={busy} onClick={() => wrap(async () => {
+                const nationId = Number((document.getElementById("bf-nation") as HTMLInputElement)?.value);
+                const since = (document.getElementById("bf-since") as HTMLInputElement)?.value || "2026-11-01T00:00:00.000Z";
+                const typed = window.prompt("Credits site balance from offshore bank history. Type CREDIT to confirm:");
+                if (typed !== "CREDIT") { setMsg("Cancelled."); return; }
+                const j = await post({ action: "offshore_backfill_apply", nationId, since, confirm: "CREDIT" });
+                setReport(JSON.stringify(j, null, 2));
+                setMsg("Credited.");
+              })}>Credit net to site</button>
+            </div>
+          </div>
         </div>
       )}
       {msg && <p className="text-xs text-[var(--accent)]">{msg}</p>}

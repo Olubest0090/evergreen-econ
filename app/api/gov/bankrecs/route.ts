@@ -3,6 +3,7 @@ import { requireStaff, type Staff } from "@/lib/auth";
 import { db } from "@/lib/supabase";
 import { getSetting, setSetting } from "@/lib/settings";
 import { diagnoseBankrecs, syncBankrecs } from "@/lib/bankrecs";
+import { previewOffshoreNationBackfill, applyOffshoreNationBackfill } from "@/lib/offshoreBackfill";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -41,6 +42,29 @@ export async function POST(req: Request) {
   if (action === "sync") {
     const r = await syncBankrecs({ force: true });
     return NextResponse.json({ ok: true, result: r });
+  }
+
+  if (action === "offshore_backfill_preview" || action === "offshore_backfill_apply") {
+    if (!canConfigure(staff)) return err("Only the econ head can backfill.");
+    const nationId = Number(body.nationId);
+    const since = String(body.since || "2026-11-01T00:00:00.000Z");
+    const depositsOnly = body.depositsOnly === true;
+    try {
+      if (action === "offshore_backfill_preview") {
+        const preview = await previewOffshoreNationBackfill({ nationId, sinceIso: since });
+        return NextResponse.json({ ok: true, preview });
+      }
+      if (body.confirm !== "CREDIT") return err('Type CREDIT to confirm');
+      const applied = await applyOffshoreNationBackfill({
+        nationId,
+        sinceIso: since,
+        staffDiscordId: staff.discordId,
+        depositsOnly,
+      });
+      return NextResponse.json({ ok: true, ...applied });
+    } catch (e) {
+      return err(e instanceof Error ? e.message : "Backfill failed", 502);
+    }
   }
 
   if (!canConfigure(staff)) return err("Only the econ head can do that.");
