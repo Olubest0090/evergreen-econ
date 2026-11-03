@@ -226,12 +226,12 @@ export async function POST(req: Request) {
     );
   }
 
-  // IGNORE is gov-only — members cannot request it
-  if (tag === "IGNORE") {
+  // GRANT and IGNORE are gov-only — regular members cannot request them.
+  if (tag === "GRANT" || tag === "IGNORE") {
     const staff = await requireStaff();
     if (!staff) {
       return NextResponse.json(
-        { error: "Only econ staff can use IGNORE" },
+        { error: `Only econ staff can use ${tag}` },
         { status: 403 }
       );
     }

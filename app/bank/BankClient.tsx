@@ -157,12 +157,12 @@ export default function BankClient({ balances, staff }: { balances: Record<strin
         <h2 className="mb-2 text-sm font-semibold text-[var(--muted)]">Withdraw / transfer</h2>
         <p className="mb-2 text-[11px] text-[var(--muted)]">
           <strong>DEPOSIT</strong> deducts your site balance and pays from offshore automatically.
-          <strong> GRANT</strong> does not deduct your deposit balance — staff approve the request,
-          then it is automatically sent from offshore.
-          {staff ? " IGNORE is available to Econ staff." : ""}
+          {staff
+            ? " GRANT does not deduct your deposit balance — it is queued for staff approval. IGNORE is for internal gov records."
+            : ""}
         </p>
         <div className="mb-3 grid grid-cols-2 gap-2">
-          {(["DEPOSIT", "GRANT", ...(staff ? ["IGNORE" as const] : [])] as const).map((t) => (
+          {(["DEPOSIT", ...(staff ? ["GRANT" as const, "IGNORE" as const] : [])] as const).map((t) => (
             <button
               key={t}
               type="button"
