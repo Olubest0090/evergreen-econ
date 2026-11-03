@@ -1,5 +1,6 @@
 import { getDiscordBotToken } from "@/lib/secrets";
 import { RESOURCES } from "@/lib/resources";
+import { marketWorth } from "@/lib/marketWorth";
 
 const API = "https://discord.com/api/v10";
 
@@ -45,6 +46,13 @@ function amountLines(amounts: Record<string, number>) {
     .join("\n");
 }
 
+async function amountsBlock(amounts: Record<string, number>) {
+  const lines = amountLines(amounts);
+  const w = await marketWorth(amounts);
+  if (w) return `${lines}\n**Approx. worth:** ${w.label}`;
+  return lines;
+}
+
 export async function notifyDepositChannel(opts: {
   label: string;
   nationId: number;
@@ -54,18 +62,20 @@ export async function notifyDepositChannel(opts: {
 }) {
   const ch = depositChannelId();
   if (!ch) return { ok: false as const, error: "DISCORD_DEPOSIT_CHANNEL_ID not set" };
+  const worth = await marketWorth(opts.amounts);
+  const worthTag = worth ? ` (worth ~${worth.label})` : "";
   return botFetch(`/channels/${ch}/messages`, {
     method: "POST",
     body: JSON.stringify({
       embeds: [
         {
           title:
-            opts.scope === "main"
+            (opts.scope === "main"
               ? "📥 Main bank deposit credited"
-              : "📥 Offshore deposit credited",
+              : "📥 Offshore deposit credited") + worthTag,
           description: [
             `**Member:** ${opts.label} (#${opts.nationId})`,
-            amountLines(opts.amounts),
+            await amountsBlock(opts.amounts),
             opts.note ? `**Note:** ${opts.note}` : null,
           ]
             .filter(Boolean)
@@ -110,16 +120,18 @@ async function notifyRequest(
     : `**${title} request** from ${opts.label}`;
   const prefix = kind === "grant" ? "grant_req" : "warchest_req";
 
+  const worth = await marketWorth(opts.amounts);
+  const worthTag = worth ? ` (worth ~${worth.label})` : "";
   return botFetch(`/channels/${ch}/messages`, {
     method: "POST",
     body: JSON.stringify({
-      content,
+      content: content + (worth ? ` · ~${worth.label}` : ""),
       embeds: [
         {
-          title: `${title} request (Requests)`,
+          title: `${title} request (Requests)${worthTag}`,
           description: [
             `**Member:** ${opts.label} (#${opts.nationId})`,
-            amountLines(opts.amounts),
+            await amountsBlock(opts.amounts),
             opts.purpose ? `**Purpose:** ${opts.purpose}` : null,
             `**ID:** \`${opts.requestId}\``,
           ]
@@ -186,17 +198,19 @@ export async function notifyGrantWithdrawal(opts: {
     ? `<@&${role}> **GRANT withdrawal** from ${opts.label}`
     : `**GRANT withdrawal** from ${opts.label}`;
 
+  const worth = await marketWorth(opts.amounts);
+  const worthTag = worth ? ` (worth ~${worth.label})` : "";
   return botFetch(`/channels/${ch}/messages`, {
     method: "POST",
     body: JSON.stringify({
-      content,
+      content: content + (worth ? ` · ~${worth.label}` : ""),
       embeds: [
         {
-          title: "GRANT withdrawal (Bank)",
+          title: `GRANT withdrawal (Bank)${worthTag}`,
           description: [
             `**Member:** ${opts.label} (#${opts.nationId})`,
             `**Send to:** #${opts.recipientNationId}`,
-            amountLines(opts.amounts),
+            await amountsBlock(opts.amounts),
             `**ID:** \`${opts.withdrawalId}\``,
           ].join("\n"),
           color: 0xf59e0b,

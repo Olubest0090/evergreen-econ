@@ -5,6 +5,7 @@
 
 import { getDiscordBotToken } from "@/lib/secrets";
 import crypto from "crypto";
+import { marketWorth } from "@/lib/marketWorth";
 
 const RES_ORDER = [
   "money", "food", "coal", "oil", "uranium", "lead", "iron", "bauxite",
@@ -67,8 +68,9 @@ export async function sendDepositConfirmation(
     };
   }
 
+  const worth = await marketWorth(input.amounts);
   const embed = {
-    title: "Deposit Confirmation",
+    title: worth ? `Deposit Confirmation (worth ~${worth.label})` : "Deposit Confirmation",
     color: 0x22c55e,
     description: input.leaderName
       ? `Nation **#${input.nationId}** · ${input.leaderName}`
@@ -77,6 +79,9 @@ export async function sendDepositConfirmation(
       { name: "Account ID", value: String(input.accountId).slice(0, 1024), inline: true },
       { name: "Nation ID", value: String(input.nationId), inline: true },
       { name: "Date Submitted", value: when, inline: false },
+      ...(worth
+        ? [{ name: "Approx. market worth", value: worth.label, inline: false }]
+        : []),
       ...RES_ORDER.map((k) => {
         const v = Number(input.amounts[k] ?? 0);
         const name = k.charAt(0).toUpperCase() + k.slice(1);
