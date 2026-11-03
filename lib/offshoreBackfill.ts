@@ -1,16 +1,13 @@
 /**
- * One-shot: net Yema (or any nation) vs offshore AA since a date,
- * then credit the net to their site balance + Evergreen books for deposits.
+ * One-shot backfill: net deposits/withdrawals for a nation vs offshore AA since a date.
+ * Uses alliances { bankrecs } (last ~14 days of records the key can see).
  */
 import { db } from "@/lib/supabase";
 import { getSetting } from "@/lib/settings";
 import { getOffshoreApiKey, getPnwApiKey } from "@/lib/secrets";
 import { RESOURCES } from "@/lib/resources";
-import { bankrecSchema } from "@/lib/bankrecs";
 
 const URL_BASE = "https://api.politicsandwar.com/graphql";
-const PAGE = 100;
-const MAX_PAGES = 30;
 
 async function gql<T>(apiKey: string, query: string, variables: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${URL_BASE}?api_key=${encodeURIComponent(apiKey)}`, {
@@ -50,6 +47,7 @@ export type BackfillPreview = {
   withdrawalCount: number;
   memberId: string | null;
   leaderName: string | null;
+  note?: string;
 };
 
 export async function previewOffshoreNationBackfill(opts: {
@@ -72,100 +70,47 @@ export async function previewOffshoreNationBackfill(opts: {
   if (!rawKey) throw new Error("OFFSHORE_API_KEY / PNW_API_KEY missing");
   const apiKey: string = rawKey;
 
-  const s = await bankrecSchema("offshore", true);
-  const an = s.args.map((a) => a.name);
-  const fields = s.fields;
-  const pickA = (...c: string[]): string | undefined => c.find((n) => an.includes(n));
-  const pickF = (...c: string[]): string | undefined => c.find((n) => fields.includes(n));
-  const argRid = pickA("rid", "receiver_id");
-  const argSid = pickA("sid", "sender_id");
-  const argRtype = pickA("rtype", "receiver_type");
-  const argStype = pickA("stype", "sender_type");
-  const argFirst = pickA("first");
-  const fId = pickF("id");
-  const fDate = pickF("date");
-  const fSid = pickF("sender_id", "sid");
-  const fStype = pickF("sender_type", "stype");
-  const fRid = pickF("receiver_id", "rid");
-  const fRtype = pickF("receiver_type", "rtype");
-  if (!fId || !fDate || !fSid || !fStype || !fRid || !fRtype) {
-    throw new Error("Bank record schema missing required fields");
-  }
-  const fRes = RESOURCES.filter((r) => fields.includes(r));
-  const typeOf: Record<string, string> = {};
-  for (const a of s.args) typeOf[a.name] = a.type;
-
-  async function pages(filter: {
-    rid?: number;
-    sid?: number;
-    rtype?: number;
-    stype?: number;
-  }): Promise<Record<string, unknown>[]> {
-    const all: Record<string, unknown>[] = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const decl: string[] = [];
-      const call: string[] = [];
-      const vars: Record<string, unknown> = {};
-      const add = (arg: string | undefined, value: unknown) => {
-        if (!arg || !typeOf[arg]) return;
-        const t = typeOf[arg];
-        decl.push(`$${arg}: ${t}`);
-        call.push(`${arg}: $${arg}`);
-        vars[arg] = t.startsWith("[") ? (Array.isArray(value) ? value : [value]) : value;
-      };
-      if (filter.rid != null) add(argRid, filter.rid);
-      if (filter.sid != null) add(argSid, filter.sid);
-      if (filter.rtype != null) add(argRtype, filter.rtype);
-      if (filter.stype != null) add(argStype, filter.stype);
-      if (argFirst) add(argFirst, PAGE);
-      if (an.includes("page")) {
-        decl.push(`$page: Int`);
-        call.push(`page: $page`);
-        vars.page = page;
+  const data = await gql<{
+    alliances: { data: { bankrecs: Record<string, unknown>[] | null }[] };
+  }>(
+    apiKey,
+    `query($id: [Int]) {
+      alliances(id: $id, first: 1) {
+        data {
+          bankrecs {
+            id date note
+            sid stype rid rtype
+            money food coal oil uranium lead iron bauxite gasoline munitions steel aluminum
+          }
+        }
       }
-      const sel = [fId, fDate, fSid, fStype, fRid, fRtype, ...fRes].join(" ");
-      const data = await gql<{
-        bankrecs: {
-          data: Record<string, unknown>[];
-          paginatorInfo?: { hasMorePages?: boolean };
-        };
-      }>(
-        apiKey,
-        `query(${decl.join(", ")}) { bankrecs(${call.join(", ")}) { data { ${sel} } paginatorInfo { hasMorePages } } }`,
-        vars
-      );
-      const rows = data.bankrecs?.data ?? [];
-      all.push(...rows);
-      if (!data.bankrecs?.paginatorInfo?.hasMorePages || rows.length < PAGE) break;
-      if (!an.includes("page")) break;
-    }
-    return all;
-  }
+    }`,
+    { id: [aa] }
+  );
 
-  const depRows = await pages({ rid: aa, rtype: 2, stype: 1, sid: nationId });
-  const wRows = await pages({ sid: aa, stype: 2, rid: nationId, rtype: 1 });
-
+  const list = data.alliances?.data?.[0]?.bankrecs ?? [];
   const deposits: Record<string, number> = {};
   const withdrawals: Record<string, number> = {};
   let depositCount = 0;
   let withdrawalCount = 0;
 
-  for (const r of depRows) {
-    if (Number(r[fSid]) !== nationId) continue;
-    if (Number(r[fRid]) !== aa) continue;
-    if (Number(r[fStype]) !== 1 || Number(r[fRtype]) !== 2) continue;
-    const d = Date.parse(String(r[fDate] ?? ""));
+  for (const r of list) {
+    const d = Date.parse(String(r.date ?? ""));
     if (!Number.isFinite(d) || d < sinceMs) continue;
-    addAmt(deposits, r);
-    depositCount++;
-  }
-  for (const r of wRows) {
-    if (Number(r[fRid]) !== nationId) continue;
-    if (Number(r[fSid]) !== aa) continue;
-    const d = Date.parse(String(r[fDate] ?? ""));
-    if (!Number.isFinite(d) || d < sinceMs) continue;
-    addAmt(withdrawals, r);
-    withdrawalCount++;
+    const sid = Number(r.sid);
+    const rid = Number(r.rid);
+    const stype = Number(r.stype);
+    const rtype = Number(r.rtype);
+    // Deposit: nation -> offshore AA
+    if (stype === 1 && rtype === 2 && sid === nationId && rid === aa) {
+      addAmt(deposits, r);
+      depositCount++;
+    }
+    // Withdrawal to nation: AA -> nation
+    if (stype === 2 && rtype === 1 && sid === aa && rid === nationId) {
+      addAmt(withdrawals, r);
+      withdrawalCount++;
+    }
   }
 
   const net: Record<string, number> = {};
@@ -191,6 +136,7 @@ export async function previewOffshoreNationBackfill(opts: {
     withdrawalCount,
     memberId: mem?.status === "active" ? String(mem.id) : mem?.id != null ? String(mem.id) : null,
     leaderName: mem?.leader_name ?? null,
+    note: "Game only returns ~last 14 days of alliance bankrecs.",
   };
 }
 
@@ -217,11 +163,13 @@ export async function applyOffshoreNationBackfill(opts: {
   const memberId: string = preview.memberId;
   const amounts = opts.depositsOnly ? preview.deposits : preview.net;
   if (!Object.keys(amounts).length) {
-    throw new Error("Nothing to credit (net is zero or empty for that period).");
+    throw new Error(
+      "Nothing to credit. Game only exposes ~last 14 days of bankrecs; deposit may be older, or already net zero."
+    );
   }
 
   const supa = db();
-  const note = `Offshore backfill since ${preview.since.slice(0, 10)} (bankrecs net)`;
+  const note = `Offshore backfill since ${preview.since.slice(0, 10)} (alliance bankrecs)`;
 
   let usedRpc = false;
   for (const [res, amt] of Object.entries(amounts)) {
