@@ -313,18 +313,20 @@ export async function POST(req: Request) {
     const mode = String(body.mode || "add");
     let csv = String(body.csv || body.text || body.sheet || "");
     if (!csv.trim() && body.url) {
-      try {
-        csv = await fetchSheetCsv(String(body.url));
-      } catch (e) {
-        return bad(e instanceof Error ? e.message : "Could not fetch sheet");
-      }
+      const got = await fetchSheetCsv(String(body.url));
+      if (!got.ok) return bad(got.error);
+      csv = got.csv;
     }
     if (!csv.trim()) return bad("Paste the sheet or provide a Google Sheet link");
     // Preview only
     if (body.preview === true || body.dryRun === true) {
       const built = await planImport(supa, csv, mode === "match" ? "match" : "add");
       if ("error" in built) return bad(built.error);
-      return NextResponse.json({ ok: true, ...built.plan, pending: (built.plan as { pending?: unknown }).pending });
+      return NextResponse.json({
+        ok: true,
+        ...built.plan,
+        pending: (built.plan as { pending?: unknown }).pending,
+      });
     }
     const applied = await applyLocutusImport({
       csv,
