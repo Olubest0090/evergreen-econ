@@ -205,6 +205,7 @@ export default function GovClient({ owner }: { owner: boolean }) {
           </button>
         ))}
         <a href="/gov/disburse" className="pill whitespace-nowrap">Disburse</a>
+        <a href="/gov/send" className="pill whitespace-nowrap">Send</a>
         {owner && <a href="/owner-security" className="pill whitespace-nowrap">Security</a>}
       </div>
 
