@@ -61,8 +61,25 @@ export async function GET() {
   const staff = await requireStaff();
   if (!staff) return err("Forbidden", 403);
   const cfg = await getSetting<OffshoreConfig | null>("offshore", null);
-  return NextResponse.json({ offshore: cfg, canConfigure: canConfigure(staff), autoOffshore: await getSetting("auto_offshore", { enabled: false }),
-      keys: await keyStatus() });
+  const autoOffshore = await getSetting<{ enabled?: boolean; minMinutes?: number; maxMinutes?: number }>(
+    "auto_offshore",
+    { enabled: false, minMinutes: 10, maxMinutes: 25 }
+  );
+  const autoState = await getSetting<{ fireAtMs?: number; lastTurnMs?: number; plannedForTurnMs?: number }>(
+    "auto_offshore_state",
+    {}
+  );
+  return NextResponse.json({
+    offshore: cfg,
+    canConfigure: canConfigure(staff),
+    keys: await keyStatus(),
+    autoOffshore: {
+      enabled: !!autoOffshore?.enabled,
+      minMinutes: autoOffshore?.minMinutes ?? 10,
+      maxMinutes: autoOffshore?.maxMinutes ?? 25,
+    },
+    autoOffshoreState: autoState,
+  });
 }
 
 export async function POST(req: Request) {
@@ -79,15 +96,6 @@ export async function POST(req: Request) {
   const supa = db();
 
   /* ----- send one approved member withdrawal from the offshore ----- */
-  if (action === "set_auto_offshore") {
-    if (!staff.isHead && !staff.canManageRoles) {
-      return err("Only the econ head can change auto offshore.");
-    }
-    const enabled = !!body.enabled;
-    await setSetting("auto_offshore", { enabled });
-    return NextResponse.json({ ok: true, autoOffshore: { enabled } });
-  }
-
   if (action === "send_withdrawal") {
     if (!staff.can("withdrawals")) return err("You don't have permission for that. Ask the econ head.");
     const id = String(body.id || "");
@@ -135,6 +143,23 @@ export async function POST(req: Request) {
 
   /* ----- everything below changes the offshore setup: heads only ----- */
   if (!canConfigure(staff)) return err("Only the econ head can do that.");
+
+  if (action === "set_auto_offshore") {
+    const enabled = !!body.enabled;
+    const minMinutes = Number(body.minMinutes);
+    const maxMinutes = Number(body.maxMinutes);
+    const min = Number.isFinite(minMinutes) && minMinutes > 0 ? Math.min(110, minMinutes) : 10;
+    const max = Number.isFinite(maxMinutes) && maxMinutes >= min ? Math.min(119, maxMinutes) : 25;
+    await setSetting("auto_offshore", { enabled, minMinutes: min, maxMinutes: max });
+    // reset plan so next cron picks a fresh random delay for this turn
+    await setSetting("auto_offshore_state", {});
+    await supa.from("econ_audit_log").insert({
+      actor_discord_id: staff.discordId,
+      action: "auto_offshore_config",
+      details: { enabled, minMinutes: min, maxMinutes: max },
+    });
+    return NextResponse.json({ ok: true, autoOffshore: { enabled, minMinutes: min, maxMinutes: max } });
+  }
 
   if (action === "diagnose") {
     const actor = body.actor === "offshore" ? "offshore" : "source";

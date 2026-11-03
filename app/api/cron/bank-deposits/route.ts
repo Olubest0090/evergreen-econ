@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { syncBankrecs } from "@/lib/bankrecs";
+import { maybeRunAutoOffshore } from "@/lib/autoOffshore";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -22,7 +23,17 @@ export async function GET(req: Request) {
 
   try {
     const result = await syncBankrecs({ minIntervalMs: 120_000 });
-    return NextResponse.json({ ok: true, ...result });
+    let autoOffshore: { ran: boolean; reason: string; record?: string | null } | null = null;
+    try {
+      autoOffshore = await maybeRunAutoOffshore();
+    } catch (e) {
+      console.error("auto-offshore cron:", e);
+      autoOffshore = {
+        ran: false,
+        reason: e instanceof Error ? e.message : "auto-offshore error",
+      };
+    }
+    return NextResponse.json({ ok: true, ...result, autoOffshore });
   } catch (error) {
     console.error("bank-deposits cron:", error);
     return NextResponse.json(

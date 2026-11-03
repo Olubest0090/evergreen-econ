@@ -14,7 +14,6 @@ import { getBankApiKey, getOffshoreApiKey, getPnwApiKey } from "@/lib/secrets";
 import { RESOURCES, type Resource } from "@/lib/resources";
 import { makeDepositCode, sendDepositConfirmation } from "@/lib/depositNotify";
 import { notifyDepositChannel } from "@/lib/discordNotify";
-import { executeOffshoreSendAll } from "@/lib/offshoreOps";
 
 type BankRec = {
   id: string | number;
@@ -382,28 +381,6 @@ export async function syncBankDeposits(opts?: {
     }
   } else if (offshoreAllianceId > 0) {
     result.offshore.errors.push("OFFSHORE_API_KEY missing");
-  }
-
-  // Auto-offshore: after new main deposits, empty main AA → offshore (if enabled)
-  if (result.main.credited > 0 && !opts?.onlyNationId) {
-    try {
-      const auto = await getSetting<{ enabled?: boolean }>("auto_offshore", { enabled: false });
-      if (auto?.enabled) {
-        const off = await executeOffshoreSendAll("system:auto_offshore");
-        await db().from("econ_audit_log").insert({
-          actor_discord_id: "system",
-          action: off.ok ? "auto_offshore_ok" : "auto_offshore_failed",
-          details: off.ok
-            ? { amounts: off.amounts, receiver: off.receiver, record: off.record }
-            : { error: off.error },
-        });
-        if (!off.ok) result.main.errors.push(`auto_offshore: ${off.error}`);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "auto_offshore failed";
-      result.main.errors.push(msg);
-      console.error("auto_offshore", e);
-    }
   }
 
   await db().from("econ_audit_log").insert({

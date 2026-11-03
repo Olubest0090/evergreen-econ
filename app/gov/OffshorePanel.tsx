@@ -72,6 +72,9 @@ function TrackingCard() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [autoOff, setAutoOff] = useState(false);
+  const [autoMin, setAutoMin] = useState("10");
+  const [autoMax, setAutoMax] = useState("25");
+  const [autoFire, setAutoFire] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/gov/bankrecs", { cache: "no-store" });
@@ -149,6 +152,9 @@ export default function OffshorePanel() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [busy, setBusy] = useState(false);
   const [autoOff, setAutoOff] = useState(false);
+  const [autoMin, setAutoMin] = useState("10");
+  const [autoMax, setAutoMax] = useState("25");
+  const [autoFire, setAutoFire] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/gov/offshore", { cache: "no-store" });
@@ -166,6 +172,13 @@ export default function OffshorePanel() {
     setKeys(j.keys as Keys);
     setCan(!!j.canConfigure);
     setAutoOff(!!j.autoOffshore?.enabled);
+    setAutoMin(String(j.autoOffshore?.minMinutes ?? 10));
+    setAutoMax(String(j.autoOffshore?.maxMinutes ?? 25));
+    setAutoFire(
+      j.autoOffshoreState?.fireAtMs
+        ? new Date(j.autoOffshoreState.fireAtMs).toLocaleString()
+        : null
+    );
   }, []);
 
   useEffect(() => {
@@ -204,33 +217,71 @@ export default function OffshorePanel() {
       <TrackingCard />
 
       <div className="card space-y-2">
-        <h3 className="font-semibold">Auto offshore</h3>
+        <h3 className="font-semibold">Auto offshore (after turn)</h3>
         <p className="text-xs text-[var(--muted)]">
-          When on, every time the site credits a new deposit into the <strong>main</strong> bank,
-          it automatically sends the whole main bank balance to the offshore (same as &quot;Send everything&quot;).
-          Member site balances are unchanged — only the in-game main AA is emptied into offshore.
+          When on, each P&amp;W turn (every 2 hours) the site waits a <strong>random</strong> delay between
+          the minutes you set (default <strong>10–25</strong>), then empties the main bank into the offshore.
+          Uses the same 1‑minute deposit cron. Runs at most once per turn.
         </p>
+        {autoFire && autoOff && (
+          <p className="text-[11px] text-[var(--muted)]">Next planned fire (this turn): {autoFire}</p>
+        )}
         {can ? (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={autoOff}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={autoOff}
+                disabled={busy}
+                onChange={(e) =>
+                  wrap(async () => {
+                    const on = e.target.checked;
+                    await call({
+                      action: "set_auto_offshore",
+                      enabled: on,
+                      minMinutes: Number(autoMin) || 10,
+                      maxMinutes: Number(autoMax) || 25,
+                    });
+                    setAutoOff(on);
+                    setMsg(on ? "Auto offshore ON (random delay after each turn)." : "Auto offshore OFF.");
+                    await load();
+                  })
+                }
+              />
+              Enable auto offshore
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block text-[11px] text-[var(--muted)]">
+                Min minutes after turn
+                <input className="input mt-1" inputMode="numeric" value={autoMin} onChange={(e) => setAutoMin(e.target.value)} />
+              </label>
+              <label className="block text-[11px] text-[var(--muted)]">
+                Max minutes after turn
+                <input className="input mt-1" inputMode="numeric" value={autoMax} onChange={(e) => setAutoMax(e.target.value)} />
+              </label>
+            </div>
+            <button
+              type="button"
+              className="btn-ghost w-full"
               disabled={busy}
-              onChange={(e) =>
+              onClick={() =>
                 wrap(async () => {
-                  const on = e.target.checked;
-                  await call({ action: "set_auto_offshore", enabled: on });
-                  setAutoOff(on);
-                  setMsg(on ? "Auto offshore is ON." : "Auto offshore is OFF.");
+                  await call({
+                    action: "set_auto_offshore",
+                    enabled: autoOff,
+                    minMinutes: Number(autoMin) || 10,
+                    maxMinutes: Number(autoMax) || 25,
+                  });
+                  setMsg("Saved delay window.");
+                  await load();
                 })
               }
-            />
-            Enable auto offshore after main deposits
-          </label>
+            >
+              Save delay window
+            </button>
+          </div>
         ) : (
-          <p className="text-xs text-[var(--muted)]">
-            Status: {autoOff ? "ON" : "OFF"} (only head can change)
-          </p>
+          <p className="text-xs text-[var(--muted)]">Status: {autoOff ? "ON" : "OFF"} · {autoMin}–{autoMax} min after turn</p>
         )}
       </div>
 
