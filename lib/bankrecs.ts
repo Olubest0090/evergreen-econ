@@ -212,7 +212,12 @@ export async function syncBankrecs(opts: { minIntervalMs?: number; force?: boole
     const alliance = await getSetting<{ alliance_id?: number | null }>("alliance", {});
     const offshore = await getSetting<{ offshore_alliance_id?: number } | null>("offshore", null);
     const books = await getSetting<BooksCfg>("offshore_books", {});
-    const trusted = new Set((books.trusted_depositors ?? []).map(Number));
+    // Trusted = explicit list + offshore banker nation (Yema) from offshore config
+    const trusted = new Set((books.trusted_depositors ?? []).map(Number).filter((n) => n > 0));
+    const bankerId = Number(
+      (offshore as { banker_nation_id?: number } | null)?.banker_nation_id || 0
+    );
+    if (bankerId > 0) trusted.add(bankerId);
     const cursor = await getSetting<Cursor>("bankrec_cursor", {});
     if (!cursor.start) cursor.start = new Date().toISOString(); // never credit history from before tracking began
     const startMs = Date.parse(cursor.start);
