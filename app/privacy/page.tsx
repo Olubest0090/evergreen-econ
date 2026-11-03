@@ -25,8 +25,9 @@ export default function PrivacyPage() {
         </p>
 
         <p>
-          Evergreen does not collect personal information such as your IP, real name, home address,
+          Evergreen does not collect personal information such as your IP address, real name, home address,
           phone number, or payment details. This site is hosted on a popular third-party host
+          (Vercel).
         </p>
 
         <h2 className="text-base font-semibold">1. What we use to run the site</h2>
