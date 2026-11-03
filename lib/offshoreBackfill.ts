@@ -1,11 +1,6 @@
 /**
  * One-shot: net Yema (or any nation) vs offshore AA since a date,
  * then credit the net to their site balance + Evergreen books for deposits.
- *
- * Deposits:  nation → offshore AA  (stype 1, rtype 2)  → +
- * Withdrawals to them: offshore AA → nation (stype 2, rtype 1) → −
- * Net per resource = max(0, deposits − withdrawals) for site credit
- *   (we never force negative balance here; staff can adjust by hand if needed)
  */
 import { db } from "@/lib/supabase";
 import { getSetting } from "@/lib/settings";
@@ -16,16 +11,6 @@ import { bankrecSchema } from "@/lib/bankrecs";
 const URL_BASE = "https://api.politicsandwar.com/graphql";
 const PAGE = 100;
 const MAX_PAGES = 30;
-
-type TypeRef = { kind: string; name: string | null; ofType: TypeRef | null };
-const typeName = (t: TypeRef | null): string =>
-  !t
-    ? "?"
-    : t.kind === "NON_NULL"
-      ? `${typeName(t.ofType)}!`
-      : t.kind === "LIST"
-        ? `[${typeName(t.ofType)}]`
-        : t.name ?? "?";
 
 async function gql<T>(apiKey: string, query: string, variables: Record<string, unknown>): Promise<T> {
   const res = await fetch(`${URL_BASE}?api_key=${encodeURIComponent(apiKey)}`, {
@@ -47,10 +32,7 @@ async function gql<T>(apiKey: string, query: string, variables: Record<string, u
   return json.data;
 }
 
-function addAmt(
-  into: Record<string, number>,
-  row: Record<string, unknown>
-) {
+function addAmt(into: Record<string, number>, row: Record<string, unknown>) {
   for (const r of RESOURCES) {
     const v = Number(row[r] ?? 0);
     if (v > 0.0001) into[r] = Math.round(((into[r] ?? 0) + v) * 100) / 100;
@@ -86,26 +68,29 @@ export async function previewOffshoreNationBackfill(opts: {
   const aa = Number(offshore?.offshore_alliance_id || 0);
   if (!aa) throw new Error("Offshore alliance ID is not set");
 
-  const apiKey = (await getOffshoreApiKey()) || (await getPnwApiKey());
-  if (!apiKey) throw new Error("OFFSHORE_API_KEY / PNW_API_KEY missing");
+  const rawKey = (await getOffshoreApiKey()) || (await getPnwApiKey());
+  if (!rawKey) throw new Error("OFFSHORE_API_KEY / PNW_API_KEY missing");
+  const apiKey: string = rawKey;
 
-  // Schema-aware field names (reuse bankrecs schema helper)
   const s = await bankrecSchema("offshore", true);
   const an = s.args.map((a) => a.name);
   const fields = s.fields;
-  const pickA = (...c: string[]) => c.find((n) => an.includes(n));
-  const pickF = (...c: string[]) => c.find((n) => fields.includes(n));
+  const pickA = (...c: string[]): string | undefined => c.find((n) => an.includes(n));
+  const pickF = (...c: string[]): string | undefined => c.find((n) => fields.includes(n));
   const argRid = pickA("rid", "receiver_id");
   const argSid = pickA("sid", "sender_id");
   const argRtype = pickA("rtype", "receiver_type");
   const argStype = pickA("stype", "sender_type");
   const argFirst = pickA("first");
-  const fId = pickF("id")!;
-  const fDate = pickF("date")!;
-  const fSid = pickF("sender_id", "sid")!;
-  const fStype = pickF("sender_type", "stype")!;
-  const fRid = pickF("receiver_id", "rid")!;
-  const fRtype = pickF("receiver_type", "rtype")!;
+  const fId = pickF("id");
+  const fDate = pickF("date");
+  const fSid = pickF("sender_id", "sid");
+  const fStype = pickF("sender_type", "stype");
+  const fRid = pickF("receiver_id", "rid");
+  const fRtype = pickF("receiver_type", "rtype");
+  if (!fId || !fDate || !fSid || !fStype || !fRid || !fRtype) {
+    throw new Error("Bank record schema missing required fields");
+  }
   const fRes = RESOURCES.filter((r) => fields.includes(r));
   const typeOf: Record<string, string> = {};
   for (const a of s.args) typeOf[a.name] = a.type;
@@ -129,18 +114,22 @@ export async function previewOffshoreNationBackfill(opts: {
         vars[arg] = t.startsWith("[") ? (Array.isArray(value) ? value : [value]) : value;
       };
       if (filter.rid != null) add(argRid, filter.rid);
-      if (filter.sid != null && argSid) add(argSid, filter.sid);
-      if (filter.rtype != null && argRtype) add(argRtype, filter.rtype);
-      if (filter.stype != null && argStype) add(argStype, filter.stype);
+      if (filter.sid != null) add(argSid, filter.sid);
+      if (filter.rtype != null) add(argRtype, filter.rtype);
+      if (filter.stype != null) add(argStype, filter.stype);
       if (argFirst) add(argFirst, PAGE);
-      // pagination via page arg if present
       if (an.includes("page")) {
         decl.push(`$page: Int`);
         call.push(`page: $page`);
         vars.page = page;
       }
       const sel = [fId, fDate, fSid, fStype, fRid, fRtype, ...fRes].join(" ");
-      const data = await gql<{ bankrecs: { data: Record<string, unknown>[]; paginatorInfo?: { hasMorePages?: boolean } } }>(
+      const data = await gql<{
+        bankrecs: {
+          data: Record<string, unknown>[];
+          paginatorInfo?: { hasMorePages?: boolean };
+        };
+      }>(
         apiKey,
         `query(${decl.join(", ")}) { bankrecs(${call.join(", ")}) { data { ${sel} } paginatorInfo { hasMorePages } } }`,
         vars
@@ -148,14 +137,12 @@ export async function previewOffshoreNationBackfill(opts: {
       const rows = data.bankrecs?.data ?? [];
       all.push(...rows);
       if (!data.bankrecs?.paginatorInfo?.hasMorePages || rows.length < PAGE) break;
-      if (!an.includes("page")) break; // can't paginate further without page
+      if (!an.includes("page")) break;
     }
     return all;
   }
 
-  // Deposits: nation → offshore AA
   const depRows = await pages({ rid: aa, rtype: 2, stype: 1, sid: nationId });
-  // Withdrawals: offshore AA → nation
   const wRows = await pages({ sid: aa, stype: 2, rid: nationId, rtype: 1 });
 
   const deposits: Record<string, number> = {};
@@ -202,7 +189,7 @@ export async function previewOffshoreNationBackfill(opts: {
     net,
     depositCount,
     withdrawalCount,
-    memberId: mem?.status === "active" ? mem.id : mem?.id ?? null,
+    memberId: mem?.status === "active" ? String(mem.id) : mem?.id != null ? String(mem.id) : null,
     leaderName: mem?.leader_name ?? null,
   };
 }
@@ -211,7 +198,6 @@ export async function applyOffshoreNationBackfill(opts: {
   nationId: number;
   sinceIso: string;
   staffDiscordId: string;
-  /** if true, credit full deposits and ignore withdrawals (default: net) */
   depositsOnly?: boolean;
 }): Promise<{
   ok: true;
@@ -228,6 +214,7 @@ export async function applyOffshoreNationBackfill(opts: {
       `Nation #${opts.nationId} is not registered on the site (or inactive). Register them first.`
     );
   }
+  const memberId: string = preview.memberId;
   const amounts = opts.depositsOnly ? preview.deposits : preview.net;
   if (!Object.keys(amounts).length) {
     throw new Error("Nothing to credit (net is zero or empty for that period).");
@@ -236,14 +223,13 @@ export async function applyOffshoreNationBackfill(opts: {
   const supa = db();
   const note = `Offshore backfill since ${preview.since.slice(0, 10)} (bankrecs net)`;
 
-  // Prefer per-resource RPC if available; else ledger insert
   let usedRpc = false;
   for (const [res, amt] of Object.entries(amounts)) {
     const { error } = await supa.rpc("econ_credit_deposit", {
-      p_member: preview.memberId,
+      p_member: memberId,
       p_resource: res,
       p_amount: amt,
-      p_bankrec: -Math.floor(Date.now() / 1000), // synthetic id for idempotency batch
+      p_bankrec: -Math.floor(Date.now() / 1000),
       p_note: note,
     });
     if (error) {
@@ -255,7 +241,7 @@ export async function applyOffshoreNationBackfill(opts: {
 
   if (!usedRpc) {
     const rows = Object.entries(amounts).map(([resource, amount]) => ({
-      member_id: preview.memberId,
+      member_id: memberId,
       resource,
       amount,
       kind: "deposit",
@@ -266,7 +252,6 @@ export async function applyOffshoreNationBackfill(opts: {
     if (error) throw new Error(error.message);
   }
 
-  // Books: credit Evergreen net for deposit side only
   if (Object.keys(preview.deposits).length) {
     await supa.from("econ_audit_log").insert({
       actor_discord_id: opts.staffDiscordId,
@@ -296,5 +281,5 @@ export async function applyOffshoreNationBackfill(opts: {
     },
   });
 
-  return { ok: true, credited: amounts, memberId: preview.memberId, preview };
+  return { ok: true, credited: amounts, memberId, preview };
 }

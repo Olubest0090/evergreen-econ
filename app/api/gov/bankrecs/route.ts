@@ -54,14 +54,19 @@ export async function POST(req: Request) {
         const preview = await previewOffshoreNationBackfill({ nationId, sinceIso: since });
         return NextResponse.json({ ok: true, preview });
       }
-      if (body.confirm !== "CREDIT") return err('Type CREDIT to confirm');
+      if (body.confirm !== "CREDIT") return err("Type CREDIT to confirm");
       const applied = await applyOffshoreNationBackfill({
         nationId,
         sinceIso: since,
         staffDiscordId: staff.discordId,
         depositsOnly,
       });
-      return NextResponse.json({ ok: true, ...applied });
+      return NextResponse.json({
+        ok: true,
+        credited: applied.credited,
+        memberId: applied.memberId,
+        preview: applied.preview,
+      });
     } catch (e) {
       return err(e instanceof Error ? e.message : "Backfill failed", 502);
     }
@@ -74,7 +79,6 @@ export async function POST(req: Request) {
   }
 
   if (action === "set_start") {
-    // Deposits older than this are never credited. "now" starts tracking from this moment.
     const raw = String(body.start || "now");
     const when = raw === "now" ? new Date() : new Date(raw);
     if (Number.isNaN(when.getTime())) return err("That date isn't valid");
