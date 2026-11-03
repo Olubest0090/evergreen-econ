@@ -14,7 +14,7 @@ export default function PrivacyPage() {
       </p>
       <h1 className="mt-3 text-xl font-bold">Privacy Policy</h1>
       <p className="mt-1 text-xs text-[var(--muted)]">
-        Evergreen Econ · Last updated 30 October 2026
+        Evergreen Econ · Last updated 3 November 2026
       </p>
 
       <div className="mt-6 space-y-4 text-[var(--text)]">
@@ -24,7 +24,13 @@ export default function PrivacyPage() {
           withdrawals are records for in-game resources only.
         </p>
 
-        <h2 className="text-base font-semibold">1. What we collect</h2>
+        <p>
+          Evergreen does not collect personal information such as your real name, home address,
+          phone number, or payment details. This site is hosted on a popular third-party host
+          (Vercel). We do not use your IP address for advertising, tracking, or profiling.
+        </p>
+
+        <h2 className="text-base font-semibold">1. What we use to run the site</h2>
         <p>
           <strong>From Discord</strong> when you sign in: Discord user id, display name, avatar
           URL, and whether you have the roles we use to decide member or econ staff access. We use
@@ -34,14 +40,14 @@ export default function PrivacyPage() {
         <p>
           <strong>From Politics &amp; War</strong>: nation id, nation name, leader name, city count
           and related public/alliance data needed to match your Discord name to your nation and to
-          show warchest and tax information. If bank tools are enabled, an alliance or offshore API
-          key and verified bot key are stored only on the host (e.g. Vercel environment variables),
-          not in the browser.
+          show warchest information. If bank tools are enabled, an alliance or offshore API key and
+          verified bot key are stored only on the host (Vercel environment variables or the staff
+          Keys screen), not in your browser.
         </p>
         <p>
           <strong>From your use of the site</strong>: account balances, ledger entries, withdrawal
-          and grant requests, staff decisions, audit log actions, and sign-in session data. Server
-          logs may include IP address and pages requested for security and debugging.
+          and grant requests, staff decisions, audit log actions, and sign-in session data needed
+          to keep the alliance econ books accurate.
         </p>
 
         <h2 className="text-base font-semibold">2. Why we use it</h2>
@@ -57,7 +63,7 @@ export default function PrivacyPage() {
         <ul className="list-disc space-y-1 pl-5">
           <li>You: your own balances, requests and activity</li>
           <li>Econ staff / heads: what they need to run the department, subject to role permissions</li>
-          <li>Hosting providers (e.g. Vercel, Supabase) that run the site and database</li>
+          <li>Hosting providers (Vercel for the app, Supabase for the database) that run the service</li>
           <li>Discord and Politics &amp; War, when we call their services to sign in or move in-game resources</li>
         </ul>
 
@@ -71,8 +77,7 @@ export default function PrivacyPage() {
         <h2 className="text-base font-semibold">5. How long we keep it</h2>
         <p>
           Account and bookkeeping records are kept while the alliance runs this service. Session
-          cookies expire when you log out or when the session ends. Server logs are kept only as
-          long as needed for security and operations.
+          cookies expire when you log out or when the session ends.
         </p>
 
         <h2 className="text-base font-semibold">6. Children</h2>
