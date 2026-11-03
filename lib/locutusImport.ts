@@ -35,7 +35,7 @@ export async function planLocutusImport(
   const byId = new Map<number, { id: string; label: string }>();
   const byName = new Map<string, { id: string; label: string } | null>();
   for (const m of members ?? []) {
-    const label = `\( {m.leader_name ?? m.nation_name} (# \){m.nation_id})`;
+    const label = `${m.leader_name ?? m.nation_name} (#${m.nation_id})`;
     byId.set(Number(m.nation_id), { id: m.id, label });
     for (const n of [m.nation_name, m.leader_name]) {
       const key = String(n ?? "").trim().toLowerCase();
@@ -53,7 +53,7 @@ export async function planLocutusImport(
     .limit(20000);
   const current = new Map<string, number>();
   for (const b of bal ?? []) {
-    current.set(`\( {b.member_id}| \){b.resource}`, Number(b.balance));
+    current.set(`${b.member_id}|${b.resource}`, Number(b.balance));
   }
 
   const plan: LocutusPlan = {
@@ -82,12 +82,12 @@ export async function planLocutusImport(
       const v = parseNumber(row[col] ?? "");
       if (v === null) continue;
       if (Number.isNaN(v)) {
-        plan.errors.push(`\( {who}: " \){row[col]}" is not a number (${resource}).`);
+        plan.errors.push(`${who}: "${row[col]}" is not a number (${resource}).`);
         continue;
       }
       if (hit) {
         const delta =
-          mode === "add" ? v : v - (current.get(`\( {hit.id}| \){resource}`) ?? 0);
+          mode === "add" ? v : v - (current.get(`${hit.id}|${resource}`) ?? 0);
         if (Math.abs(delta) >= 0.005) deltas[resource] = Math.round(delta * 100) / 100;
       } else {
         // pending: store sheet values as add amounts (match mode still uses sheet numbers)
