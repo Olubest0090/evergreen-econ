@@ -61,7 +61,8 @@ export async function GET() {
   const staff = await requireStaff();
   if (!staff) return err("Forbidden", 403);
   const cfg = await getSetting<OffshoreConfig | null>("offshore", null);
-  return NextResponse.json({ offshore: cfg, canConfigure: canConfigure(staff), keys: await keyStatus() });
+  return NextResponse.json({ offshore: cfg, canConfigure: canConfigure(staff), autoOffshore: await getSetting("auto_offshore", { enabled: false }),
+      keys: await keyStatus() });
 }
 
 export async function POST(req: Request) {
@@ -78,6 +79,15 @@ export async function POST(req: Request) {
   const supa = db();
 
   /* ----- send one approved member withdrawal from the offshore ----- */
+  if (action === "set_auto_offshore") {
+    if (!staff.isHead && !staff.canManageRoles) {
+      return err("Only the econ head can change auto offshore.");
+    }
+    const enabled = !!body.enabled;
+    await setSetting("auto_offshore", { enabled });
+    return NextResponse.json({ ok: true, autoOffshore: { enabled } });
+  }
+
   if (action === "send_withdrawal") {
     if (!staff.can("withdrawals")) return err("You don't have permission for that. Ask the econ head.");
     const id = String(body.id || "");

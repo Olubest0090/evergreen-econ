@@ -71,6 +71,7 @@ function TrackingCard() {
   const [report, setReport] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [autoOff, setAutoOff] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/gov/bankrecs", { cache: "no-store" });
@@ -147,6 +148,7 @@ export default function OffshorePanel() {
   const [report, setReport] = useState("");
   const [plan, setPlan] = useState<Plan | null>(null);
   const [busy, setBusy] = useState(false);
+  const [autoOff, setAutoOff] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/gov/offshore", { cache: "no-store" });
@@ -163,6 +165,7 @@ export default function OffshorePanel() {
     setLabel(o.label || "");
     setKeys(j.keys as Keys);
     setCan(!!j.canConfigure);
+    setAutoOff(!!j.autoOffshore?.enabled);
   }, []);
 
   useEffect(() => {
@@ -199,6 +202,37 @@ export default function OffshorePanel() {
 
       <BooksCard />
       <TrackingCard />
+
+      <div className="card space-y-2">
+        <h3 className="font-semibold">Auto offshore</h3>
+        <p className="text-xs text-[var(--muted)]">
+          When on, every time the site credits a new deposit into the <strong>main</strong> bank,
+          it automatically sends the whole main bank balance to the offshore (same as &quot;Send everything&quot;).
+          Member site balances are unchanged — only the in-game main AA is emptied into offshore.
+        </p>
+        {can ? (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={autoOff}
+              disabled={busy}
+              onChange={(e) =>
+                wrap(async () => {
+                  const on = e.target.checked;
+                  await call({ action: "set_auto_offshore", enabled: on });
+                  setAutoOff(on);
+                  setMsg(on ? "Auto offshore is ON." : "Auto offshore is OFF.");
+                })
+              }
+            />
+            Enable auto offshore after main deposits
+          </label>
+        ) : (
+          <p className="text-xs text-[var(--muted)]">
+            Status: {autoOff ? "ON" : "OFF"} (only head can change)
+          </p>
+        )}
+      </div>
 
       {can ? (
         <>
