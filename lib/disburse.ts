@@ -45,11 +45,11 @@ type City = {
   infrastructure?: number | null;
   land?: number | null;
   date?: string | null;
-  coal_power?: number | null;
-  oil_power?: number | null;
-  nuclear_power?: number | null;
-  wind_power?: number | null;
-  farms?: number | null;
+  coalpower?: number | null;
+  oilpower?: number | null;
+  nuclearpower?: number | null;
+  windpower?: number | null;
+  farm?: number | null;
 };
 
 type NationRow = {
@@ -82,7 +82,7 @@ export async function fetchAllianceNationsForTax(
           ${RES_FIELDS}
           cities {
             infrastructure land date
-            coal_power oil_power nuclear_power wind_power farms
+            coalpower oilpower nuclearpower windpower farm
           }
         }
       }
@@ -141,17 +141,18 @@ function dailyConsumption(n: NationRow): Record<string, number> {
   food += soldiers / 750;
   if (food > 0.01) daily.food = Math.round(food * 100) / 100;
 
+  // Power plant fuel — wiki: coal/oil power ≈ 1.2 resource per plant per day
+  // Nuclear: ~2.25 uranium/day per plant (common AA estimate; scales with count)
   let coal = 0;
   let oil = 0;
   let uranium = 0;
   for (const c of cities) {
-    const infra = Math.max(Number(c.infrastructure ?? 0), 1);
-    const coalP = Number(c.coal_power ?? 0);
-    const oilP = Number(c.oil_power ?? 0);
-    const nucP = Number(c.nuclear_power ?? 0);
-    coal += coalP * (infra / 1000) * 1.5 * 12;
-    oil += oilP * (infra / 1000) * 1.5 * 12;
-    uranium += nucP * (infra / 1000) * 1.2 * 12;
+    const coalP = Number(c.coalpower ?? 0);
+    const oilP = Number(c.oilpower ?? 0);
+    const nucP = Number(c.nuclearpower ?? 0);
+    coal += coalP * 1.2;
+    oil += oilP * 1.2;
+    uranium += nucP * 2.25;
   }
   if (coal > 0.01) daily.coal = Math.round(coal * 100) / 100;
   if (oil > 0.01) daily.oil = Math.round(oil * 100) / 100;
