@@ -86,6 +86,43 @@ export default function GovClient({ owner }: { owner: boolean }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [taxForm, setTaxForm] = useState({ name: "", money_pct: "", resource_pct: "", note: "" });
 
+  const [backfillBusy, setBackfillBusy] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<{ membersProcessed: number; depositsClaimed: number } | null>(null);
+
+  async function runLocutusBackfill() {
+    if (!window.confirm("Run the historical Locutus deposit backfill now? Already claimed deposits will not be credited twice.")) return;
+
+    setBackfillBusy(true);
+    setBackfillResult(null);
+    setMsg("");
+
+    try {
+      const res = await fetch("/api/gov/locutus-backfill", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data.error || `Backfill failed (${res.status})`);
+      }
+
+      setBackfillResult({
+        membersProcessed: Number(data.membersProcessed ?? 0),
+        depositsClaimed: Number(data.depositsClaimed ?? 0),
+      });
+
+      setMsg("Locutus historical backfill completed.");
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBackfillBusy(false);
+    }
+  }
+
+
   const fail = (e: unknown) => setMsg(e instanceof Error ? e.message : "Something went wrong");
 
   const load = useCallback(async () => {
@@ -497,7 +534,35 @@ export default function GovClient({ owner }: { owner: boolean }) {
       )}
 
       {tab === "import" && (
-        <div className="card space-y-3">
+        <div className="space-y-3">
+          {meInfo?.isHead && (
+            <section className="card space-y-2">
+              <div>
+                <h2 className="font-semibold">Locutus historical backfill</h2>
+                <p className="text-xs text-[var(--muted)]">
+                  Claim historical deposits already imported from Locutus for members who have now registered.
+                  Previously claimed deposits are skipped to prevent duplicate credits.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="btn w-full"
+                disabled={backfillBusy}
+                onClick={() => void runLocutusBackfill()}
+              >
+                {backfillBusy ? "Running backfill…" : "Run Locutus backfill"}
+              </button>
+
+              {backfillResult && (
+                <p className="text-xs text-[var(--muted)]">
+                  Completed: {backfillResult.membersProcessed} members processed · {backfillResult.depositsClaimed} deposits claimed.
+                </p>
+              )}
+            </section>
+          )}
+
+          <div className="card space-y-3">
           <p className="text-xs text-[var(--muted)]">
             Send the link of the Locutus deposit sheet. It must be shared as &quot;Anyone with the link can view&quot;. The first row (or a row near the top) needs column names such as Nation or Nation ID, then Money, Food, Steel and so on. Blank cells are ignored. People who have never logged in here are listed as not found.
           </p>
