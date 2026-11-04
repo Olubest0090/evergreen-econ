@@ -86,6 +86,14 @@ export default function GovClient({ owner }: { owner: boolean }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [taxForm, setTaxForm] = useState({ name: "", money_pct: "", resource_pct: "", note: "" });
 
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryPreview, setRecoveryPreview] = useState<{
+    eligibleNations: number;
+    entries: number;
+    totals: Record<string, number>;
+  } | null>(null);
+  const [recoveryDone, setRecoveryDone] = useState(false);
+
   const [backfillBusy, setBackfillBusy] = useState(false);
   const [backfillResult, setBackfillResult] = useState<{ membersProcessed: number; depositsClaimed: number } | null>(null);
 
@@ -558,6 +566,106 @@ export default function GovClient({ owner }: { owner: boolean }) {
                 <p className="text-xs text-[var(--muted)]">
                   Completed: {backfillResult.membersProcessed} members processed · {backfillResult.depositsClaimed} deposits claimed.
                 </p>
+              )}
+            </section>
+          )}
+
+          {meInfo?.isHead && (
+            <section className="card space-y-3">
+              <div>
+                <h2 className="font-semibold">Recover missing Locutus deposits</h2>
+                <p className="text-xs text-[var(--muted)]">
+                  Recovers historical deposits for members who registered after
+                  November 3, 2026 at 8:40 PM Nigeria time. Uses the original
+                  Locutus sheet and skips deposits already recovered.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="btn w-full"
+                disabled={recoveryBusy || (!pasteMode && !sheetUrl.trim()) || (pasteMode && !csv.trim())}
+                onClick={async () => {
+                  setRecoveryBusy(true);
+                  setRecoveryPreview(null);
+                  setRecoveryDone(false);
+                  setMsg("");
+                  try {
+                    const r = await post({
+                      action: "import_locutus_recovery",
+                      ...(pasteMode ? { csv } : { url: sheetUrl }),
+                      preview: true,
+                    });
+                    setRecoveryPreview({
+                      eligibleNations: Number(r.eligibleNations ?? 0),
+                      entries: Number(r.entries ?? 0),
+                      totals: r.totals ?? {},
+                    });
+                    setMsg(r.message || "Recovery preview ready. No balances changed.");
+                  } catch (e) {
+                    fail(e);
+                  } finally {
+                    setRecoveryBusy(false);
+                  }
+                }}
+              >
+                {recoveryBusy ? "Checking Locutus sheet…" : "Preview missing deposits"}
+              </button>
+
+              {recoveryPreview && (
+                <div className="space-y-2 rounded-xl border border-[var(--border)] p-3 text-xs">
+                  <p className="font-semibold">
+                    {recoveryPreview.eligibleNations} eligible members · {recoveryPreview.entries} deposit entries
+                  </p>
+                  <p className="text-[var(--muted)]">Amounts to recover:</p>
+                  {Object.entries(recoveryPreview.totals).map(([resource, amount]) => (
+                    <p key={resource}>
+                      {LABEL[resource] || resource}: <strong>{fmt(amount)}</strong>
+                    </p>
+                  ))}
+                  {recoveryPreview.entries === 0 ? (
+                    <p className="text-[var(--gold)]">No eligible deposits were found. Nothing can be credited.</p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn w-full"
+                      disabled={recoveryBusy}
+                      onClick={async () => {
+                        const summary = Object.entries(recoveryPreview.totals)
+                          .map(([k, v]) => `${LABEL[k] || k}: ${fmt(v)}`)
+                          .join("\\n");
+                        if (!window.confirm(
+                          `Credit these recovered deposits to ${recoveryPreview.eligibleNations} members?\\n\\n${summary}\\n\\nAlready recovered deposits will be skipped.`
+                        )) return;
+
+                        setRecoveryBusy(true);
+                        setMsg("");
+                        try {
+                          const r = await post({
+                            action: "import_locutus_recovery",
+                            ...(pasteMode ? { csv } : { url: sheetUrl }),
+                          });
+                          setRecoveryDone(true);
+                          setRecoveryPreview(null);
+                          setMsg(
+                            `Recovery completed. Credited ${r.result?.credited_entries ?? 0} entries; skipped ${r.result?.skipped_entries ?? 0} duplicate or ineligible entries.`
+                          );
+                          await load();
+                        } catch (e) {
+                          fail(e);
+                        } finally {
+                          setRecoveryBusy(false);
+                        }
+                      }}
+                    >
+                      {recoveryBusy ? "Crediting deposits…" : "Confirm and credit deposits"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {recoveryDone && (
+                <p className="text-xs text-[var(--muted)]">Recovery completed successfully.</p>
               )}
             </section>
           )}
