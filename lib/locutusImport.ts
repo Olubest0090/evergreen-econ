@@ -1,12 +1,12 @@
 import crypto from "crypto";
 import { db } from "@/lib/supabase";
 import { parseNumber, readSheet } from "@/lib/sheet";
+import { fetchAllianceNations } from "@/lib/pnw";
+import { getSetting } from "@/lib/settings";
 
 export type LocutusPlan = {
   matched: { memberId: string; nationId: number; label: string; deltas: Record<string, number> }[];
-  /** Unregistered but has nation ID → will be saved as pending on apply */
   pending: { nationId: number; label: string; deltas: Record<string, number> }[];
-  /** No nation ID or unusable row */
   unmatched: string[];
   errors: string[];
   resources: string[];
@@ -17,7 +17,13 @@ function batchId(csv: string): string {
   return crypto.createHash("sha256").update(csv).digest("hex").slice(0, 24);
 }
 
-/** Preview: registered → matched; unregistered with nation ID → pending. */
+function norm(s: string): string {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
 export async function planLocutusImport(
   csv: string,
   mode: string
@@ -36,15 +42,39 @@ export async function planLocutusImport(
   const byName = new Map<string, { id: string; label: string; nationId: number } | null>();
   for (const m of members ?? []) {
     const label = `${m.leader_name ?? m.nation_name} (#${m.nation_id})`;
-    byId.set(Number(m.nation_id), { id: m.id, label, nationId: Number(m.nation_id) });
+    const nationId = Number(m.nation_id);
+    byId.set(nationId, { id: m.id, label, nationId });
     for (const n of [m.nation_name, m.leader_name]) {
-      const key = String(n ?? "").trim().toLowerCase();
+      const key = norm(String(n ?? ""));
       if (!key) continue;
       byName.set(
         key,
-        byName.has(key) && byName.get(key)?.id !== m.id ? null : { id: m.id, label, nationId: Number(m.nation_id) }
+        byName.has(key) && byName.get(key)?.id !== m.id ? null : { id: m.id, label, nationId }
       );
     }
+  }
+
+  // Unregistered name → nation ID via live alliance roster
+  const pnwByName = new Map<string, { nationId: number; label: string }>();
+  try {
+    const alliance = await getSetting<{ alliance_id?: number }>("alliance", {});
+    const allianceId = Number(alliance?.alliance_id);
+    if (allianceId > 0) {
+      const nations = await fetchAllianceNations(allianceId);
+      for (const n of nations) {
+        const nid = Number(n.id);
+        if (!Number.isFinite(nid) || nid <= 0) continue;
+        const label = `${n.leader_name || n.nation_name} (#${nid})`;
+        for (const key of [norm(n.nation_name), norm(n.leader_name)]) {
+          if (!key || byName.has(key)) continue;
+          const prev = pnwByName.get(key);
+          if (prev && prev.nationId !== nid) pnwByName.delete(key);
+          else if (!prev) pnwByName.set(key, { nationId: nid, label });
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Locutus import P&W name resolve failed:", e);
   }
 
   const { data: bal } = await supa
@@ -70,12 +100,13 @@ export async function planLocutusImport(
   sheet.rows.forEach((row, i) => {
     const idText = sheet.idCol >= 0 ? (row[sheet.idCol] ?? "").replace(/\D/g, "") : "";
     const nameText = sheet.nameCol >= 0 ? (row[sheet.nameCol] ?? "").trim() : "";
-    const nationId = idText ? Number(idText) : 0;
+    const nationIdFromSheet = idText ? Number(idText) : 0;
     const who = idText ? `#${idText}` : nameText || `row ${i + 2}`;
 
-    const hit = idText
-      ? byId.get(nationId)
-      : byName.get(nameText.toLowerCase());
+    let hit =
+      (nationIdFromSheet > 0 ? byId.get(nationIdFromSheet) : undefined) ||
+      (nameText ? byName.get(norm(nameText)) : undefined) ||
+      undefined;
 
     const deltas: Record<string, number> = {};
     for (const { col, resource } of sheet.resCols) {
@@ -89,9 +120,8 @@ export async function planLocutusImport(
         const delta =
           mode === "add" ? v : v - (current.get(`${hit.id}|${resource}`) ?? 0);
         if (Math.abs(delta) >= 0.005) deltas[resource] = Math.round(delta * 100) / 100;
-      } else {
-        // pending: store sheet values as add amounts (match mode still uses sheet numbers)
-        if (Math.abs(v) >= 0.005) deltas[resource] = Math.round(v * 100) / 100;
+      } else if (Math.abs(v) >= 0.005) {
+        deltas[resource] = Math.round(v * 100) / 100;
       }
     }
     if (!Object.keys(deltas).length) return;
@@ -104,25 +134,30 @@ export async function planLocutusImport(
       seenMember.add(hit.id);
       plan.matched.push({
         memberId: hit.id,
-        nationId: nationId || hit.nationId || 0,
+        nationId: nationIdFromSheet || hit.nationId || 0,
         label: hit.label,
         deltas,
       });
       return;
     }
 
-    // Unregistered: only if we have a real nation ID
-    if (nationId > 0) {
-      if (seenNation.has(nationId)) {
-        plan.errors.push(`Nation #${nationId} appears more than once. Only the first row was used.`);
+    let pendingId = nationIdFromSheet > 0 ? nationIdFromSheet : 0;
+    let pendingLabel = nameText || (pendingId ? `#${pendingId}` : who);
+    if (!pendingId && nameText) {
+      const resolved = pnwByName.get(norm(nameText));
+      if (resolved) {
+        pendingId = resolved.nationId;
+        pendingLabel = resolved.label;
+      }
+    }
+
+    if (pendingId > 0) {
+      if (seenNation.has(pendingId)) {
+        plan.errors.push(`Nation #${pendingId} appears more than once. Only the first row was used.`);
         return;
       }
-      seenNation.add(nationId);
-      plan.pending.push({
-        nationId,
-        label: nameText || `#${nationId}`,
-        deltas,
-      });
+      seenNation.add(pendingId);
+      plan.pending.push({ nationId: pendingId, label: pendingLabel, deltas });
       return;
     }
 
@@ -132,7 +167,6 @@ export async function planLocutusImport(
   return { plan };
 }
 
-/** Apply: credit matched members + save pending for unregistered nation IDs. */
 export async function applyLocutusImport(opts: {
   csv: string;
   mode: string;
@@ -159,8 +193,7 @@ export async function applyLocutusImport(opts: {
   for (const m of plan.matched) {
     for (const [resource, amount] of Object.entries(m.deltas)) {
       if (!amount) continue;
-      const kind =
-        opts.mode === "add" && amount > 0 ? "deposit" : "adjustment";
+      const kind = opts.mode === "add" && amount > 0 ? "deposit" : "adjustment";
       const { error } = await supa.from("econ_ledger").insert({
         member_id: m.memberId,
         resource,

@@ -9,7 +9,8 @@ export function authorizeUrl(state: string, redirectUri: string): string {
     redirect_uri: redirectUri,
     scope: "identify guilds.members.read",
     state,
-    prompt: "none",
+    // Allow Discord to show consent if the user needs the guilds scope again
+    prompt: "consent",
   });
   return `https://discord.com/oauth2/authorize?${p.toString()}`;
 }
@@ -30,7 +31,10 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<s
     }),
     cache: "no-store",
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    console.error("discord token exchange failed:", res.status, await res.text().catch(() => ""));
+    return null;
+  }
   const json = (await res.json()) as { access_token?: string };
   return json.access_token ?? null;
 }
@@ -45,15 +49,41 @@ export async function fetchUser(token: string): Promise<DiscordUser | null> {
   return res.ok ? ((await res.json()) as DiscordUser) : null;
 }
 
-/** The user's membership in the server, or null if they are not in it. */
-export async function fetchGuildMember(token: string, guildId: string): Promise<{ roles: string[] } | null> {
+/**
+ * Membership in the configured guild.
+ * 1) User OAuth: GET /users/@me/guilds/{guild}/member
+ * 2) Fallback with bot token: GET /guilds/{guild}/members/{user}
+ */
+export async function fetchGuildMember(
+  token: string,
+  guildId: string,
+  userId?: string
+): Promise<{ roles: string[]; via: "user" | "bot" } | null> {
   const res = await fetch(`${API}/users/@me/guilds/${guildId}/member`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
-  if (!res.ok) return null;
-  const json = (await res.json()) as { roles?: string[] };
-  return { roles: json.roles ?? [] };
+  if (res.ok) {
+    const json = (await res.json()) as { roles?: string[] };
+    return { roles: json.roles ?? [], via: "user" };
+  }
+  console.error("guild member (user token) failed:", res.status, guildId);
+
+  // Bot fallback — works when user is in the server even if OAuth guild scope glitches
+  const bot = process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN;
+  if (bot && userId) {
+    const botRes = await fetch(`${API}/guilds/${guildId}/members/${userId}`, {
+      headers: { Authorization: `Bot ${bot}` },
+      cache: "no-store",
+    });
+    if (botRes.ok) {
+      const json = (await botRes.json()) as { roles?: string[] };
+      return { roles: json.roles ?? [], via: "bot" };
+    }
+    console.error("guild member (bot) failed:", botRes.status, guildId, userId);
+  }
+
+  return null;
 }
 
 /** Compare Discord names loosely: case, a leading @, and the old #1234 tag are ignored. */
