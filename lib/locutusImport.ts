@@ -32,17 +32,17 @@ export async function planLocutusImport(
     .select("id, nation_id, nation_name, leader_name")
     .limit(3000);
 
-  const byId = new Map<number, { id: string; label: string }>();
-  const byName = new Map<string, { id: string; label: string } | null>();
+  const byId = new Map<number, { id: string; label: string; nationId: number }>();
+  const byName = new Map<string, { id: string; label: string; nationId: number } | null>();
   for (const m of members ?? []) {
     const label = `${m.leader_name ?? m.nation_name} (#${m.nation_id})`;
-    byId.set(Number(m.nation_id), { id: m.id, label });
+    byId.set(Number(m.nation_id), { id: m.id, label, nationId: Number(m.nation_id) });
     for (const n of [m.nation_name, m.leader_name]) {
       const key = String(n ?? "").trim().toLowerCase();
       if (!key) continue;
       byName.set(
         key,
-        byName.has(key) && byName.get(key)?.id !== m.id ? null : { id: m.id, label }
+        byName.has(key) && byName.get(key)?.id !== m.id ? null : { id: m.id, label, nationId: Number(m.nation_id) }
       );
     }
   }
@@ -104,7 +104,7 @@ export async function planLocutusImport(
       seenMember.add(hit.id);
       plan.matched.push({
         memberId: hit.id,
-        nationId: nationId || 0,
+        nationId: nationId || hit.nationId || 0,
         label: hit.label,
         deltas,
       });

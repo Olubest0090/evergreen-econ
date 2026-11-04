@@ -314,92 +314,147 @@ export async function POST(req: Request) {
   if (action === "import_locutus_recovery") {
     if (!staff.can("import")) return noPerm();
 
-    const cutoff = "2026-11-03T19:40:00.000Z";
-    let csv = String(body.csv || body.text || body.sheet || "");
+    // 8:40 PM Nigeria time (WAT = UTC+1) on 3 Nov 2026
+    const cutoff = String(body.cutoff || "2026-11-03T19:40:00.000Z");
+    const cutoffMs = new Date(cutoff).getTime();
+    if (!Number.isFinite(cutoffMs)) return bad("Invalid cutoff time");
 
+    let csv = String(body.csv || body.text || body.sheet || "");
     if (!csv.trim() && body.url) {
       const got = await fetchSheetCsv(String(body.url));
       if (!got.ok) return bad(got.error);
       csv = got.csv;
     }
-
     if (!csv.trim()) return bad("Provide the original Locutus sheet or Google Sheet link.");
 
+    // "add" = sheet amounts as deposits (for people who still have ~0 after registering)
     const built = await planLocutusImport(csv, "add");
     if ("error" in built) return bad(built.error);
-
     const plan = built.plan;
-    const nationIds = [...new Set(
-      plan.matched
-        .map((m) => Number(m.nationId))
-        .filter((id) => Number.isSafeInteger(id) && id > 0)
-    )];
 
-    if (!nationIds.length) {
-      return bad("No matched rows with valid nation IDs were found. Check the Locutus sheet.");
+    if (!plan.matched.length) {
+      return bad("No sheet rows matched registered members. They must log in once first, then run recovery again.");
     }
 
+    // Load registration times for matched member IDs
+    const memberIds = [...new Set(plan.matched.map((m) => m.memberId))];
     const { data: members, error: memberError } = await supa
       .from("econ_members")
-      .select("id, nation_id, created_at")
-      .in("nation_id", nationIds);
-
+      .select("id, nation_id, leader_name, nation_name, created_at, last_login")
+      .in("id", memberIds);
     if (memberError) {
       console.error("Locutus recovery member lookup:", memberError.message);
       return bad("Could not check member registration dates.", 500);
     }
 
-    const eligible = new Set(
-      (members ?? [])
-        .filter((m) => m.created_at && new Date(m.created_at).getTime() > new Date(cutoff).getTime())
-        .map((m) => Number(m.nation_id))
-    );
+    const memberById = new Map((members ?? []).map((m) => [m.id, m]));
 
-    const rows: { nation_id: number; resource: string; amount: number }[] = [];
+    type Credit = {
+      memberId: string;
+      nationId: number;
+      label: string;
+      resource: string;
+      amount: number;
+    };
+    const credits: Credit[] = [];
 
-    for (const member of plan.matched) {
-      const nationId = Number(member.nationId);
-      if (!nationId || !eligible.has(nationId)) continue;
+    for (const row of plan.matched) {
+      const mem = memberById.get(row.memberId);
+      if (!mem) continue;
+      // Prefer created_at; fall back to last_login
+      const reg = mem.created_at || mem.last_login;
+      if (!reg) continue;
+      if (new Date(reg).getTime() <= cutoffMs) continue; // registered before cutoff → skip
 
-      for (const [resource, rawAmount] of Object.entries(member.deltas)) {
-        const amount = Number(rawAmount);
-        if (Number.isFinite(amount) && amount > 0) {
-          rows.push({ nation_id: nationId, resource, amount });
-        }
+      const nationId = Number(mem.nation_id) || Number(row.nationId) || 0;
+      const label = `${mem.leader_name || mem.nation_name || "Member"} (#${nationId})`;
+
+      for (const [resource, raw] of Object.entries(row.deltas)) {
+        const amount = Number(raw);
+        if (!Number.isFinite(amount) || amount <= 0) continue;
+        credits.push({
+          memberId: row.memberId,
+          nationId,
+          label,
+          resource,
+          amount: Math.round(amount * 100) / 100,
+        });
       }
     }
 
     const totals: Record<string, number> = {};
-    for (const row of rows) {
-      totals[row.resource] = Math.round(
-        ((totals[row.resource] ?? 0) + row.amount) * 100
-      ) / 100;
+    const byMember = new Map<string, { label: string; nationId: number; amounts: Record<string, number> }>();
+    for (const c of credits) {
+      totals[c.resource] = Math.round(((totals[c.resource] ?? 0) + c.amount) * 100) / 100;
+      const cur = byMember.get(c.memberId) || { label: c.label, nationId: c.nationId, amounts: {} };
+      cur.amounts[c.resource] = Math.round(((cur.amounts[c.resource] ?? 0) + c.amount) * 100) / 100;
+      byMember.set(c.memberId, cur);
     }
+
+    const eligibleList = [...byMember.entries()].map(([id, v]) => ({
+      memberId: id,
+      nationId: v.nationId,
+      label: v.label,
+      amounts: v.amounts,
+    }));
 
     if (body.preview === true || body.dryRun === true) {
       return NextResponse.json({
         ok: true,
         preview: true,
         cutoff,
-        eligibleNations: new Set(rows.map((r) => r.nation_id)).size,
-        entries: rows.length,
+        eligibleNations: eligibleList.length,
+        entries: credits.length,
         totals,
-        message: "Preview only. No balances have been changed."
+        members: eligibleList.slice(0, 80),
+        message:
+          eligibleList.length === 0
+            ? "No members registered after the cutoff matched the sheet. Nothing would change."
+            : `Preview only. Would credit ${eligibleList.length} member(s). Older registrations are skipped.`,
       });
     }
 
-    if (!staff.isHead) return bad("Only the econ head can apply this recovery.", 403);
-    if (!rows.length) return bad("No eligible deposits found. Nothing was credited.");
+    if (!staff.isHead && staff.perms !== null) {
+      // allow any staff with import if no head restriction needed — keep head-only apply
+      if (!staff.isHead) return bad("Only the econ head can apply this recovery.", 403);
+    }
+    if (!credits.length) {
+      return bad("No eligible deposits found (nobody registered after the cutoff matched the sheet).");
+    }
 
-    const { data, error } = await supa.rpc("econ_recover_locutus_after_cutoff", {
-      p_rows: rows,
-      p_cutoff: cutoff,
-      p_staff: staff.discordId
-    });
+    // Idempotent note tag for this cutoff recovery
+    const noteTag = `Locutus recovery after ${cutoff}`;
+    let inserted = 0;
+    let skipped = 0;
 
-    if (error) {
-      console.error("Locutus recovery RPC:", error.message);
-      return bad("Recovery failed: " + error.message, 500);
+    for (const c of credits) {
+      // Skip if this exact recovery credit already exists for this member+resource
+      const { data: existing } = await supa
+        .from("econ_ledger")
+        .select("id")
+        .eq("member_id", c.memberId)
+        .eq("resource", c.resource)
+        .eq("kind", "deposit")
+        .eq("note", noteTag)
+        .limit(1);
+      if (existing?.length) {
+        skipped += 1;
+        continue;
+      }
+
+      const { error: insErr } = await supa.from("econ_ledger").insert({
+        member_id: c.memberId,
+        resource: c.resource,
+        amount: c.amount,
+        kind: "deposit",
+        note: noteTag,
+        created_by: staff.discordId,
+      });
+      if (insErr) {
+        console.error("recovery insert failed:", insErr.message, c);
+        return bad(`Stopped part-way after ${inserted} entries: ${insErr.message}`, 500);
+      }
+      inserted += 1;
     }
 
     await supa.from("econ_audit_log").insert({
@@ -407,19 +462,23 @@ export async function POST(req: Request) {
       action: "locutus_registration_recovery",
       details: {
         cutoff,
-        eligibleNations: new Set(rows.map((r) => r.nation_id)).size,
-        entries: rows.length,
+        eligibleNations: eligibleList.length,
+        entries: credits.length,
+        inserted,
+        skipped,
         totals,
-        result: data
-      }
+      },
     });
 
     return NextResponse.json({
       ok: true,
       preview: false,
+      cutoff,
+      eligibleNations: eligibleList.length,
+      inserted,
+      skipped,
       totals,
-      result: data,
-      message: "Locutus recovery completed."
+      message: `Credited ${inserted} ledger lines for ${eligibleList.length} member(s). Skipped ${skipped} already recovered. Members registered before the cutoff were not changed.`,
     });
   }
 
