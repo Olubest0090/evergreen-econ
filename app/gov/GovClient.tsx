@@ -713,8 +713,8 @@ export default function GovClient({ owner }: { owner: boolean }) {
               {preview.unmatched.length > 0 && <p className="text-xs text-[var(--gold)]">Not found: {preview.unmatched.join(", ")}{preview.unmatchedCount > preview.unmatched.length ? "…" : ""}</p>}
               {preview.errors.map((e, i) => <p key={i} className="text-xs text-[var(--danger)]">{e}</p>)}
               {preview.matchedCount > 0 && (
-                <button className="btn w-full" onClick={async () => {
-                  if (!window.confirm(`Apply these changes to ${preview.matchedCount} members?`)) return;
+                <button className="btn-ghost w-full" onClick={async () => {
+                  if (!window.confirm(`WARNING: This will change balances for ${preview.matchedCount} registered members.\n\nOnly use this if you intend to rewrite their deposits to match the sheet.`)) return;
                   setMsg("");
                   try {
                     const r = await post({ action: "import_apply", ...(pasteMode ? { csv } : { url: sheetUrl }), mode });
@@ -722,8 +722,16 @@ export default function GovClient({ owner }: { owner: boolean }) {
                     setPreview(null);
                     setCsv("");
                   } catch (e) { fail(e); }
-                }}>Apply to balances</button>
+                }}>Apply to registered balances (dangerous)</button>
               )}
+              <button className="btn w-full" onClick={async () => {
+                if (!window.confirm("Save deposits only for people who have NOT registered yet?\n\nRegistered members will NOT be changed. Unregistered get credit when they log in.")) return;
+                setMsg("");
+                try {
+                  const r = await post({ action: "import_pending_only", ...(pasteMode ? { csv } : { url: sheetUrl }) });
+                  setMsg(r.message || `Saved pending for ${r.pendingNations} nations (${r.pendingRows} rows).`);
+                } catch (e) { fail(e); }
+              }}>Save pending only (safe — unregistered only)</button>
             </div>
           )}
           </div>

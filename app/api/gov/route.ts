@@ -706,6 +706,70 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  // Save ONLY Locutus pending rows for unregistered nations — does not touch existing balances
+  if (action === "import_pending_only") {
+    if (!staff.can("import")) return noPerm();
+    let csv = String(body.csv ?? "");
+    const link = String(body.url ?? "").trim();
+    if (link) {
+      const got = await fetchSheetCsv(link);
+      if (!got.ok) return bad(got.error);
+      csv = got.csv;
+    }
+    if (!csv.trim()) return bad("Provide the Locutus sheet or link.");
+
+    const built = await planLocutusImport(csv, "add");
+    if ("error" in built) return bad(built.error);
+    const pending = built.plan.pending ?? [];
+    if (!pending.length) {
+      return bad("No unregistered nations with resolvable IDs on this sheet. Nothing to save as pending.");
+    }
+
+    const batch = crypto.createHash("sha256").update(`pending_only\n${csv.trim()}`).digest("hex").slice(0, 24);
+    const noteBase = `Locutus pending ${batch}`;
+    let pendingRows = 0;
+    for (const p of pending) {
+      for (const [resource, amount] of Object.entries(p.deltas)) {
+        if (!amount) continue;
+        const { error } = await supa.from("econ_locutus_pending").upsert(
+          {
+            nation_id: p.nationId,
+            nation_label: p.label,
+            resource,
+            amount,
+            import_batch: batch,
+            mode: "add",
+            note: noteBase,
+            created_by: staff.discordId,
+            claimed_at: null,
+            claimed_member_id: null,
+          },
+          { onConflict: "import_batch,nation_id,resource" }
+        );
+        if (error) return bad(`Pending save failed: ${error.message}`, 500);
+        pendingRows += 1;
+      }
+    }
+
+    await supa.from("econ_audit_log").insert({
+      actor_discord_id: staff.discordId,
+      action: "locutus_pending_only",
+      details: {
+        batch,
+        pendingNations: pending.length,
+        pendingRows,
+        labels: pending.slice(0, 40).map((p) => p.label),
+      },
+    });
+
+    return NextResponse.json({
+      ok: true,
+      pendingNations: pending.length,
+      pendingRows,
+      message: `Saved pending deposits for ${pending.length} unregistered nation(s). Existing member balances were not changed. They get credit on first login.`,
+    });
+  }
+
   if (action === "import_preview" || action === "import_apply") {
     if (!staff.can("import")) return noPerm();
     let csv = String(body.csv ?? "");
@@ -721,6 +785,7 @@ export async function POST(req: Request) {
     const { plan } = result;
 
     if (action === "import_preview") {
+      const pendingList = plan.pending ?? [];
       return NextResponse.json({
         ok: true,
         mode,
@@ -730,6 +795,11 @@ export async function POST(req: Request) {
         matchedCount: plan.matched.length,
         unmatched: plan.unmatched.slice(0, 60),
         unmatchedCount: plan.unmatched.length,
+        pendingCount: pendingList.length,
+        pending: pendingList.slice(0, 40).map((p: { nationId: number; label: string }) => ({
+          nationId: p.nationId,
+          label: p.label,
+        })),
         errors: plan.errors.slice(0, 30),
       });
     }
