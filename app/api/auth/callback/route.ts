@@ -41,13 +41,32 @@ export async function GET(req: Request) {
     const memberCfg = (rows?.find((row) => row.key === "member_roles")?.value ?? {}) as Roles;
     if (!alliance.alliance_id || !alliance.guild_id) return fail("setup");
 
-    const guildMember = await fetchGuildMember(token, String(alliance.guild_id), user.id);
+    // Hard exceptions: Discord user IDs allowed even if guild membership API fails
+    // (e.g. Poperti 847107536293199882)
+    const LOGIN_EXCEPTIONS = new Set(
+      String(process.env.LOGIN_DISCORD_EXCEPTIONS || "847107536293199882")
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    );
+    const isException = LOGIN_EXCEPTIONS.has(String(user.id));
+
+    let guildMember = await fetchGuildMember(token, String(alliance.guild_id), user.id);
+    if (!guildMember && isException) {
+      console.warn("login exception: treating as in-server", user.id, user.username);
+      guildMember = { roles: [], via: "user" as const };
+    }
     if (!guildMember) return fail("not_in_server");
 
-    const staff = (roleCfg.role_ids ?? []).some((id) => guildMember.roles.includes(String(id)));
-    const isMember = (memberCfg.role_ids ?? []).some((id) =>
-      guildMember.roles.includes(String(id))
+    const staff = (roleCfg.role_ids ?? []).some((id) => guildMember!.roles.includes(String(id)));
+    let isMember = (memberCfg.role_ids ?? []).some((id) =>
+      guildMember!.roles.includes(String(id))
     );
+    // Exception users without readable roles still count as members
+    if (!staff && !isMember && isException) {
+      console.warn("login exception: granting member access", user.id, user.username);
+      isMember = true;
+    }
     if (!staff && !isMember) return fail("not_member");
 
     const allianceIds = [...new Set([Number(alliance.alliance_id), 15718].filter((n) => n > 0))];
