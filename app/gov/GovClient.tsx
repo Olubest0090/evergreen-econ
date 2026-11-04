@@ -618,6 +618,7 @@ export default function GovClient({ owner }: { owner: boolean }) {
               )}
             </div>
           )}
+          </div>
         </div>
       )}
 
