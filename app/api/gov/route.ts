@@ -308,6 +308,121 @@ export async function POST(req: Request) {
   const bad = (m: string, s = 400) => NextResponse.json({ error: m }, { status: s });
 
 
+
+  // Recover Locutus deposits for members registered after the cutoff.
+  // Preview first; applying is separately requested.
+  if (action === "import_locutus_recovery") {
+    if (!staff.can("import")) return noPerm();
+
+    const cutoff = "2026-11-03T19:40:00.000Z";
+    let csv = String(body.csv || body.text || body.sheet || "");
+
+    if (!csv.trim() && body.url) {
+      const got = await fetchSheetCsv(String(body.url));
+      if (!got.ok) return bad(got.error);
+      csv = got.csv;
+    }
+
+    if (!csv.trim()) return bad("Provide the original Locutus sheet or Google Sheet link.");
+
+    const built = await planLocutusImport(csv, "add");
+    if ("error" in built) return bad(built.error);
+
+    const plan = built.plan;
+    const nationIds = [...new Set(
+      plan.matched
+        .map((m) => Number(m.nationId))
+        .filter((id) => Number.isSafeInteger(id) && id > 0)
+    )];
+
+    if (!nationIds.length) {
+      return bad("No matched rows with valid nation IDs were found. Check the Locutus sheet.");
+    }
+
+    const { data: members, error: memberError } = await supa
+      .from("econ_members")
+      .select("id, nation_id, created_at")
+      .in("nation_id", nationIds);
+
+    if (memberError) {
+      console.error("Locutus recovery member lookup:", memberError.message);
+      return bad("Could not check member registration dates.", 500);
+    }
+
+    const eligible = new Set(
+      (members ?? [])
+        .filter((m) => m.created_at && new Date(m.created_at).getTime() > new Date(cutoff).getTime())
+        .map((m) => Number(m.nation_id))
+    );
+
+    const rows: { nation_id: number; resource: string; amount: number }[] = [];
+
+    for (const member of plan.matched) {
+      const nationId = Number(member.nationId);
+      if (!nationId || !eligible.has(nationId)) continue;
+
+      for (const [resource, rawAmount] of Object.entries(member.deltas)) {
+        const amount = Number(rawAmount);
+        if (Number.isFinite(amount) && amount > 0) {
+          rows.push({ nation_id: nationId, resource, amount });
+        }
+      }
+    }
+
+    const totals: Record<string, number> = {};
+    for (const row of rows) {
+      totals[row.resource] = Math.round(
+        ((totals[row.resource] ?? 0) + row.amount) * 100
+      ) / 100;
+    }
+
+    if (body.preview === true || body.dryRun === true) {
+      return NextResponse.json({
+        ok: true,
+        preview: true,
+        cutoff,
+        eligibleNations: new Set(rows.map((r) => r.nation_id)).size,
+        entries: rows.length,
+        totals,
+        message: "Preview only. No balances have been changed."
+      });
+    }
+
+    if (!staff.isHead) return bad("Only the econ head can apply this recovery.", 403);
+    if (!rows.length) return bad("No eligible deposits found. Nothing was credited.");
+
+    const { data, error } = await supa.rpc("econ_recover_locutus_after_cutoff", {
+      p_rows: rows,
+      p_cutoff: cutoff,
+      p_staff: staff.discordId
+    });
+
+    if (error) {
+      console.error("Locutus recovery RPC:", error.message);
+      return bad("Recovery failed: " + error.message, 500);
+    }
+
+    await supa.from("econ_audit_log").insert({
+      actor_discord_id: staff.discordId,
+      action: "locutus_registration_recovery",
+      details: {
+        cutoff,
+        eligibleNations: new Set(rows.map((r) => r.nation_id)).size,
+        entries: rows.length,
+        totals,
+        result: data
+      }
+    });
+
+    return NextResponse.json({
+      ok: true,
+      preview: false,
+      totals,
+      result: data,
+      message: "Locutus recovery completed."
+    });
+  }
+
   if (action === "import_locutus" || action === "import") {
     if (!staff.can("balances") && !staff.can("members") && !staff.can("requests")) return noPerm();
     const mode = String(body.mode || "add");
