@@ -42,9 +42,9 @@ export async function GET(req: Request) {
     if (!alliance.alliance_id || !alliance.guild_id) return fail("setup");
 
     // Hard exceptions: Discord user IDs allowed even if guild membership API fails
-    // (e.g. Poperti 847107536293199882)
+    // (e.g. Poperti 1496974130422218833)
     const LOGIN_EXCEPTIONS = new Set(
-      String(process.env.LOGIN_DISCORD_EXCEPTIONS || "847107536293199882")
+      String(process.env.LOGIN_DISCORD_EXCEPTIONS || "1496974130422218833")
         .split(/[\s,]+/)
         .map((s) => s.trim())
         .filter(Boolean)
