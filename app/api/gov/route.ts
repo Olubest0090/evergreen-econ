@@ -6,6 +6,15 @@ import crypto from "crypto";
 import { cleanAmounts, isResource, parseAmount } from "@/lib/resources";
 import { parseNumber, readSheet } from "@/lib/sheet";
 import { planLocutusImport, applyLocutusImport } from "@/lib/locutusImport";
+import {
+  previewConvertNegatives,
+  applyConvertNegatives,
+  listGrants,
+  collectGrant,
+  issueGrant,
+  activeGrantTotalsByNation,
+  formatGrantType,
+} from "@/lib/grants";
 import { fetchSheetCsv } from "@/lib/gsheet";
 import { fetchAllianceHoldings, fetchLatestMarketPrices } from "@/lib/pnw";
 import { makeDepositCode, sendDepositConfirmation } from "@/lib/depositNotify";
@@ -88,6 +97,38 @@ export async function GET(req: Request) {
       .limit(60);
     if (error) return NextResponse.json({ error: "Could not load withdrawals" }, { status: 500 });
     return NextResponse.json({ withdrawals: data });
+  }
+
+  if (a === "grants") {
+    if (!staff.can("members") && !staff.can("balances") && !staff.can("requests")) return noPerm();
+    const status = url.searchParams.get("status") || "";
+    const nationId = Number(url.searchParams.get("nationId") || 0);
+    try {
+      const rows = await listGrants({
+        status: status || undefined,
+        nationId: nationId > 0 ? nationId : undefined,
+        limit: 300,
+      });
+      return NextResponse.json({ grants: rows });
+    } catch (e) {
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "Could not load grants" },
+        { status: 500 }
+      );
+    }
+  }
+
+  if (a === "grants_convert_preview") {
+    if (!staff.can("balances") && !staff.can("members")) return noPerm();
+    try {
+      const preview = await previewConvertNegatives();
+      return NextResponse.json({ ok: true, ...preview });
+    } catch (e) {
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "Preview failed" },
+        { status: 500 }
+      );
+    }
   }
 
   if (a === "members") {
@@ -896,6 +937,76 @@ export async function POST(req: Request) {
     await supa.from("econ_audit_log").insert({ actor_discord_id: staff.discordId, action: `member_${status}`, target_member: memberId, details: { note: note(body.note) } });
     return NextResponse.json({ ok: true });
   }
+
+
+  if (action === "grants_convert_preview") {
+    if (!staff.can("balances") && !staff.can("members")) return noPerm();
+    try {
+      const preview = await previewConvertNegatives();
+      return NextResponse.json({ ok: true, ...preview });
+    } catch (e) {
+      return bad(e instanceof Error ? e.message : "Preview failed", 500);
+    }
+  }
+
+  if (action === "grants_convert_apply") {
+    if (!staff.can("balances") && !staff.isHead) return noPerm();
+    try {
+      const result = await applyConvertNegatives({
+        staffDiscordId: staff.discordId,
+        note: String(body.note || "") || undefined,
+      });
+      return NextResponse.json({ ok: true, ...result });
+    } catch (e) {
+      return bad(e instanceof Error ? e.message : "Convert failed", 500);
+    }
+  }
+
+  if (action === "grant_issue") {
+    if (!staff.can("balances") && !staff.can("requests")) return noPerm();
+    const nationId = Number(body.nationId || 0);
+    const grantType = String(body.grantType || "other") as
+      | "converted_negative"
+      | "city"
+      | "infra"
+      | "land"
+      | "project"
+      | "other";
+    const amounts =
+      body.amounts && typeof body.amounts === "object"
+        ? (body.amounts as Record<string, number>)
+        : {};
+    const result = await issueGrant({
+      memberId: body.memberId ? String(body.memberId) : undefined,
+      nationId,
+      grantType,
+      amounts,
+      meta: (body.meta as Record<string, unknown>) || {},
+      note: body.note ? String(body.note) : undefined,
+      staffDiscordId: staff.discordId,
+    });
+    if ("error" in result) return bad(result.error);
+    return NextResponse.json({ ok: true, id: result.id });
+  }
+
+  if (action === "grant_collect") {
+    if (!staff.can("balances") && !staff.can("members")) return noPerm();
+    const grantId = String(body.grantId || "");
+    if (!grantId) return bad("grantId required");
+    const result = await collectGrant({
+      grantId,
+      staffDiscordId: staff.discordId,
+      amounts:
+        body.amounts && typeof body.amounts === "object"
+          ? (body.amounts as Record<string, number>)
+          : null,
+      waive: body.waive === true,
+      note: body.note ? String(body.note) : undefined,
+    });
+    if ("error" in result) return bad(result.error);
+    return NextResponse.json({ ok: true });
+  }
+
 
   return bad("Unknown action");
 }

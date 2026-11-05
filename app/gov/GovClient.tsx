@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { RESOURCES, LABEL, describe, fmt } from "@/lib/resources";
 import OffshorePanel from "./OffshorePanel";
+import GrantsPanel from "./GrantsPanel";
 
 type Member = { discord_username: string; nation_id: number; leader_name: string | null } | null;
 type Req = { id: string; kind: string; status: string; amounts: Record<string, number>; purpose: string | null; decision_note: string | null; created_at: string; econ_members: Member };
@@ -25,7 +26,7 @@ type Detail = {
   ledger: { id: number; resource: string; amount: number; kind: string; note: string | null; created_at: string }[];
 };
 
-type Tab = "overview" | "requests" | "withdrawals" | "members" | "import" | "audit" | "warchest" | "taxes" | "roles" | "log" | "offshore";
+type Tab = "overview" | "requests" | "withdrawals" | "members" | "import" | "audit" | "warchest" | "taxes" | "roles" | "log" | "offshore" | "grants";
 
 type Overview = {
   pendingRequests: number; toSendRequests: number; pendingWithdrawals: number; toSendWithdrawals: number; members: number;
@@ -231,7 +232,7 @@ export default function GovClient({ owner }: { owner: boolean }) {
     return !need || meInfo.perms === null || meInfo.perms.includes(need);
   };
   const TABS = ([
-    ["overview", "Overview"], ["requests", "Requests"], ["withdrawals", "Withdrawals"], ["members", "Members"], ["import", "Import"],
+    ["overview", "Overview"], ["requests", "Requests"], ["withdrawals", "Withdrawals"], ["members", "Members"], ["import", "Import"], ["grants", "Grants"],
     ["audit", "Audit"], ["warchest", "Warchest"], ["roles", "Roles"], ["log", "Log"], ["offshore", "Offshore"],
   ] as [Tab, string][]).filter(([k]) => allowed(k));
   const showSubs = tab === "requests" || tab === "withdrawals";
@@ -805,6 +806,16 @@ export default function GovClient({ owner }: { owner: boolean }) {
         </div>
       )}
     
+      {tab === "grants" && (
+        <GrantsPanel
+          post={async (body) => {
+            const r = await post(body);
+            return r as Record<string, unknown>;
+          }}
+          canConvert={!!meInfo?.isHead || true}
+        />
+      )}
+
       {tab === "offshore" && <OffshorePanel />}
 
       {adjustMember && (
