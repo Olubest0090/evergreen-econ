@@ -1,5 +1,6 @@
-import GrowthGrantPanel from "./GrowthGrantPanel";
 "use client";
+
+import GrowthGrantPanel from "./GrowthGrantPanel";
 
 import { useCallback, useEffect, useState } from "react";
 import { RESOURCES, LABEL, fmt } from "@/lib/resources";
