@@ -24,6 +24,8 @@ export async function executeGrowthGrant(opts: {
   nationId: number;
   grantType: "city" | "infra" | "land" | "project";
   cityCount?: number;
+  cityTo?: number;
+  cityIds?: number[];
   targetInfra?: number;
   targetLand?: number;
   projectName?: string;
@@ -45,6 +47,8 @@ export async function executeGrowthGrant(opts: {
     nationId: opts.nationId,
     grantType: opts.grantType,
     cityCount: opts.cityCount,
+    cityTo: opts.cityTo,
+    cityIds: opts.cityIds,
     targetInfra: opts.targetInfra,
     targetLand: opts.targetLand,
     projectName: opts.projectName,

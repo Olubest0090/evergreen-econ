@@ -263,10 +263,17 @@ export type GrowthQuote =
     }
   | { ok: false; error: string };
 
+export const PROJECT_LIST = Object.keys(PROJECT_COSTS).sort();
+
 export async function quoteGrowthGrant(input: {
   nationId: number;
   grantType: "city" | "infra" | "land" | "project";
+  /** How many cities to buy (legacy) */
   cityCount?: number;
+  /** Buy until nation reaches this city count (inclusive), e.g. 35 for c31–c35 from 30 */
+  cityTo?: number;
+  /** Optional: only these city IDs for infra/land */
+  cityIds?: number[];
   targetInfra?: number;
   targetLand?: number;
   projectName?: string;
@@ -274,9 +281,19 @@ export async function quoteGrowthGrant(input: {
   try {
     const n = await fetchNationGrowth(input.nationId);
     const label = `${n.leader_name} (#${n.id})`;
+
     if (input.grantType === "city") {
-      const count = Math.max(1, Math.min(20, Number(input.cityCount) || 1));
+      let count = Math.max(1, Math.min(20, Number(input.cityCount) || 1));
+      const cityTo = Number(input.cityTo);
+      if (Number.isFinite(cityTo) && cityTo > n.num_cities) {
+        count = Math.min(20, Math.max(1, cityTo - n.num_cities));
+      } else if (Number.isFinite(cityTo) && cityTo <= n.num_cities) {
+        return { ok: false, error: `Nation already has ${n.num_cities} cities (target ${cityTo})` };
+      }
       const { money, breakdown } = cityGrantCost(n.num_cities, count, n.projects, n.domestic_policy);
+      breakdown.unshift(
+        `Grant cities c${n.num_cities + 1}–c${n.num_cities + count} (now ${n.num_cities})`
+      );
       return {
         ok: true,
         grantType: "city",
@@ -284,13 +301,39 @@ export async function quoteGrowthGrant(input: {
         label,
         amounts: { money },
         breakdown,
-        meta: { fromCities: n.num_cities, cityCount: count, policy: n.domestic_policy, projects: n.projects },
+        meta: {
+          fromCities: n.num_cities,
+          cityCount: count,
+          cityFrom: n.num_cities + 1,
+          cityTo: n.num_cities + count,
+          policy: n.domestic_policy,
+          projects: n.projects,
+        },
       };
     }
+
+    const selectedCities =
+      input.cityIds && input.cityIds.length
+        ? n.cities.filter((c) => input.cityIds!.includes(c.id))
+        : n.cities;
+    if (!selectedCities.length) {
+      return { ok: false, error: "No cities selected (or nation has no cities)" };
+    }
+
     if (input.grantType === "infra") {
       const target = Number(input.targetInfra);
-      if (!Number.isFinite(target) || target <= 0) return { ok: false, error: "Enter target infra level" };
-      const { money, breakdown } = infraGrantCost(n.cities, target, n.projects, n.domestic_policy);
+      if (!Number.isFinite(target) || target <= 0) {
+        return { ok: false, error: "Enter target infra level" };
+      }
+      const { money, breakdown } = infraGrantCost(
+        selectedCities,
+        target,
+        n.projects,
+        n.domestic_policy
+      );
+      breakdown.unshift(
+        `Cities: ${selectedCities.map((c) => `#${c.id} (${c.infrastructure} infra)`).join(", ")}`
+      );
       return {
         ok: true,
         grantType: "infra",
@@ -298,13 +341,23 @@ export async function quoteGrowthGrant(input: {
         label,
         amounts: { money },
         breakdown,
-        meta: { targetInfra: target, cities: n.cities.length },
+        meta: {
+          targetInfra: target,
+          cityIds: selectedCities.map((c) => c.id),
+          cities: selectedCities.length,
+        },
       };
     }
+
     if (input.grantType === "land") {
       const target = Number(input.targetLand);
-      if (!Number.isFinite(target) || target <= 0) return { ok: false, error: "Enter target land level" };
-      const { money, breakdown } = landGrantCost(n.cities, target, n.domestic_policy);
+      if (!Number.isFinite(target) || target <= 0) {
+        return { ok: false, error: "Enter target land level" };
+      }
+      const { money, breakdown } = landGrantCost(selectedCities, target, n.domestic_policy);
+      breakdown.unshift(
+        `Cities: ${selectedCities.map((c) => `#${c.id} (${c.land} land)`).join(", ")}`
+      );
       return {
         ok: true,
         grantType: "land",
@@ -312,11 +365,16 @@ export async function quoteGrowthGrant(input: {
         label,
         amounts: { money },
         breakdown,
-        meta: { targetLand: target, cities: n.cities.length },
+        meta: {
+          targetLand: target,
+          cityIds: selectedCities.map((c) => c.id),
+          cities: selectedCities.length,
+        },
       };
     }
+
     const pname = String(input.projectName || "").trim();
-    if (!pname) return { ok: false, error: "Enter project name" };
+    if (!pname) return { ok: false, error: "Choose a project" };
     const pc = projectGrantCost(pname, n.projects);
     if (pc.error) return { ok: false, error: pc.error };
     return {
@@ -326,7 +384,7 @@ export async function quoteGrowthGrant(input: {
       label,
       amounts: pc.amounts,
       breakdown: pc.breakdown,
-      meta: { projectName: pname },
+      meta: { projectName: pname, ownedProjects: n.projects },
     };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Quote failed" };
