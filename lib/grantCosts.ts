@@ -187,6 +187,7 @@ export function projectGrantCost(
   return { amounts, breakdown: [`Project: ${projectName}`] };
 }
 
+
 async function gql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   const key = await getPnwApiKey();
   if (!key) throw new Error("PNW_API_KEY not set");
@@ -205,25 +206,71 @@ async function gql<T>(query: string, variables: Record<string, unknown>): Promis
   return json.data as T;
 }
 
-export async function fetchNationGrowth(nationId: number): Promise<NationGrowth> {
-  const data = await gql<{
-    nations: {
-      data: {
-        id: string;
-        nation_name: string;
-        leader_name: string;
-        num_cities: number;
-        domestic_policy?: string | null;
-        projects?: { name?: string }[] | null;
-        cities?: { id: string; infrastructure?: number; land?: number }[] | null;
-      }[];
-    };
-  }>(
+const PROJECT_GQL_FIELDS: { field: string; name: string }[] = [
+  { field: "city_planning", name: "Urban Planning" },
+  { field: "adv_city_planning", name: "Advanced Urban Planning" },
+  { field: "urban_planning", name: "Urban Planning" },
+  { field: "advanced_urban_planning", name: "Advanced Urban Planning" },
+  { field: "metropolitan_planning", name: "Metropolitan Planning" },
+  { field: "cfce", name: "Center for Civil Engineering" },
+  { field: "center_for_civil_engineering", name: "Center for Civil Engineering" },
+  { field: "adv_engineering_corps", name: "Advanced Engineering Corps" },
+  { field: "advanced_engineering_corps", name: "Advanced Engineering Corps" },
+  { field: "ironw", name: "Ironworks" },
+  { field: "iron_works", name: "Ironworks" },
+  { field: "bauxitew", name: "Bauxiteworks" },
+  { field: "bauxite_works", name: "Bauxiteworks" },
+  { field: "armss", name: "Arms Stockpile" },
+  { field: "arms_stockpile", name: "Arms Stockpile" },
+  { field: "egr", name: "Emergency Gasoline Reserve" },
+  { field: "emergency_gasoline_reserve", name: "Emergency Gasoline Reserve" },
+  { field: "mlp", name: "Missile Launch Pad" },
+  { field: "missile_launch_pad", name: "Missile Launch Pad" },
+  { field: "irond", name: "Iron Dome" },
+  { field: "iron_dome", name: "Iron Dome" },
+  { field: "cia", name: "Intelligence Agency" },
+  { field: "intelligence_agency", name: "Intelligence Agency" },
+  { field: "space_program", name: "Space Program" },
+  { field: "spy_satellite", name: "Spy Satellite" },
+  { field: "moon_landing", name: "Moon Landing" },
+  { field: "green_tech", name: "Green Technologies" },
+  { field: "green_technologies", name: "Green Technologies" },
+  { field: "recycling_initiative", name: "Recycling Initiative" },
+  { field: "pirate_economy", name: "Pirate Economy" },
+  { field: "clinical_research_center", name: "Clinical Research Center" },
+  { field: "government_support_agency", name: "Government Support Agency" },
+  { field: "arable_land_agency", name: "Arable Land Agency" },
+  { field: "activity_center", name: "Activity Center" },
+  { field: "telecommunications_satellite", name: "Telecommunications Satellite" },
+  { field: "propaganda_bureau", name: "Propaganda Bureau" },
+  { field: "vital_defense_system", name: "Vital Defense System" },
+  { field: "nuclear_research_facility", name: "Nuclear Research Facility" },
+];
+
+function collectProjects(row: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const { field, name } of PROJECT_GQL_FIELDS) {
+    if (row[field] === true || row[field] === 1 || row[field] === "1") {
+      const key = name.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(name);
+      }
+    }
+  }
+  return out;
+}
+
+async function fetchNationRow(nationId: number, includeProjects: boolean): Promise<Record<string, unknown>> {
+  const projFields = includeProjects ? [...new Set(PROJECT_GQL_FIELDS.map((p) => p.field))] : [];
+  const projSel = projFields.length ? "\n          " + projFields.join("\n          ") : "";
+  const data = await gql<{ nations: { data: Record<string, unknown>[] } }>(
     `query($id:[Int]){
       nations(id:$id, first:1){
         data {
           id nation_name leader_name num_cities domestic_policy
-          projects { name }
+          ${projSel}
           cities { id infrastructure land }
         }
       }
@@ -232,18 +279,30 @@ export async function fetchNationGrowth(nationId: number): Promise<NationGrowth>
   );
   const n = data.nations?.data?.[0];
   if (!n) throw new Error(`Nation #${nationId} not found`);
-  const projects: string[] = [];
-  for (const p of n.projects || []) {
-    if (p?.name) projects.push(p.name);
+  return n;
+}
+
+export async function fetchNationGrowth(nationId: number): Promise<NationGrowth> {
+  let row: Record<string, unknown>;
+  try {
+    row = await fetchNationRow(nationId, true);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    if (/Cannot query field|Unknown type|Unknown field|must not have a sub selection/i.test(msg)) {
+      row = await fetchNationRow(nationId, false);
+    } else {
+      throw e;
+    }
   }
+  const citiesRaw = (row.cities as { id: string; infrastructure?: number; land?: number }[]) || [];
   return {
-    id: Number(n.id),
-    nation_name: n.nation_name,
-    leader_name: n.leader_name,
-    num_cities: Number(n.num_cities) || 0,
-    domestic_policy: n.domestic_policy ?? null,
-    projects,
-    cities: (n.cities || []).map((c) => ({
+    id: Number(row.id),
+    nation_name: String(row.nation_name || ""),
+    leader_name: String(row.leader_name || ""),
+    num_cities: Number(row.num_cities) || 0,
+    domestic_policy: row.domestic_policy != null ? String(row.domestic_policy) : null,
+    projects: collectProjects(row),
+    cities: citiesRaw.map((c) => ({
       id: Number(c.id),
       infrastructure: Number(c.infrastructure) || 0,
       land: Number(c.land) || 0,
@@ -268,11 +327,8 @@ export const PROJECT_LIST = Object.keys(PROJECT_COSTS).sort();
 export async function quoteGrowthGrant(input: {
   nationId: number;
   grantType: "city" | "infra" | "land" | "project";
-  /** How many cities to buy (legacy) */
   cityCount?: number;
-  /** Buy until nation reaches this city count (inclusive), e.g. 35 for c31–c35 from 30 */
   cityTo?: number;
-  /** Optional: only these city IDs for infra/land */
   cityIds?: number[];
   targetInfra?: number;
   targetLand?: number;
@@ -281,7 +337,6 @@ export async function quoteGrowthGrant(input: {
   try {
     const n = await fetchNationGrowth(input.nationId);
     const label = `${n.leader_name} (#${n.id})`;
-
     if (input.grantType === "city") {
       let count = Math.max(1, Math.min(20, Number(input.cityCount) || 1));
       const cityTo = Number(input.cityTo);
@@ -291,99 +346,43 @@ export async function quoteGrowthGrant(input: {
         return { ok: false, error: `Nation already has ${n.num_cities} cities (target ${cityTo})` };
       }
       const { money, breakdown } = cityGrantCost(n.num_cities, count, n.projects, n.domestic_policy);
-      breakdown.unshift(
-        `Grant cities c${n.num_cities + 1}–c${n.num_cities + count} (now ${n.num_cities})`
-      );
+      breakdown.unshift(`Grant cities c${n.num_cities + 1}-c${n.num_cities + count} (now ${n.num_cities})`);
       return {
-        ok: true,
-        grantType: "city",
-        nationId: n.id,
-        label,
-        amounts: { money },
-        breakdown,
-        meta: {
-          fromCities: n.num_cities,
-          cityCount: count,
-          cityFrom: n.num_cities + 1,
-          cityTo: n.num_cities + count,
-          policy: n.domestic_policy,
-          projects: n.projects,
-        },
+        ok: true, grantType: "city", nationId: n.id, label, amounts: { money }, breakdown,
+        meta: { fromCities: n.num_cities, cityCount: count, cityFrom: n.num_cities + 1, cityTo: n.num_cities + count, policy: n.domestic_policy, projects: n.projects },
       };
     }
-
     const selectedCities =
       input.cityIds && input.cityIds.length
         ? n.cities.filter((c) => input.cityIds!.includes(c.id))
         : n.cities;
-    if (!selectedCities.length) {
-      return { ok: false, error: "No cities selected (or nation has no cities)" };
-    }
-
+    if (!selectedCities.length) return { ok: false, error: "No cities selected (or nation has no cities)" };
     if (input.grantType === "infra") {
       const target = Number(input.targetInfra);
-      if (!Number.isFinite(target) || target <= 0) {
-        return { ok: false, error: "Enter target infra level" };
-      }
-      const { money, breakdown } = infraGrantCost(
-        selectedCities,
-        target,
-        n.projects,
-        n.domestic_policy
-      );
-      breakdown.unshift(
-        `Cities: ${selectedCities.map((c) => `#${c.id} (${c.infrastructure} infra)`).join(", ")}`
-      );
+      if (!Number.isFinite(target) || target <= 0) return { ok: false, error: "Enter target infra level" };
+      const { money, breakdown } = infraGrantCost(selectedCities, target, n.projects, n.domestic_policy);
+      breakdown.unshift(`Cities: ${selectedCities.map((c) => "#" + c.id + " (" + c.infrastructure + " infra)").join(", ")}`);
       return {
-        ok: true,
-        grantType: "infra",
-        nationId: n.id,
-        label,
-        amounts: { money },
-        breakdown,
-        meta: {
-          targetInfra: target,
-          cityIds: selectedCities.map((c) => c.id),
-          cities: selectedCities.length,
-        },
+        ok: true, grantType: "infra", nationId: n.id, label, amounts: { money }, breakdown,
+        meta: { targetInfra: target, cityIds: selectedCities.map((c) => c.id), cities: selectedCities.length },
       };
     }
-
     if (input.grantType === "land") {
       const target = Number(input.targetLand);
-      if (!Number.isFinite(target) || target <= 0) {
-        return { ok: false, error: "Enter target land level" };
-      }
+      if (!Number.isFinite(target) || target <= 0) return { ok: false, error: "Enter target land level" };
       const { money, breakdown } = landGrantCost(selectedCities, target, n.domestic_policy);
-      breakdown.unshift(
-        `Cities: ${selectedCities.map((c) => `#${c.id} (${c.land} land)`).join(", ")}`
-      );
+      breakdown.unshift(`Cities: ${selectedCities.map((c) => "#" + c.id + " (" + c.land + " land)").join(", ")}`);
       return {
-        ok: true,
-        grantType: "land",
-        nationId: n.id,
-        label,
-        amounts: { money },
-        breakdown,
-        meta: {
-          targetLand: target,
-          cityIds: selectedCities.map((c) => c.id),
-          cities: selectedCities.length,
-        },
+        ok: true, grantType: "land", nationId: n.id, label, amounts: { money }, breakdown,
+        meta: { targetLand: target, cityIds: selectedCities.map((c) => c.id), cities: selectedCities.length },
       };
     }
-
     const pname = String(input.projectName || "").trim();
     if (!pname) return { ok: false, error: "Choose a project" };
     const pc = projectGrantCost(pname, n.projects);
     if (pc.error) return { ok: false, error: pc.error };
     return {
-      ok: true,
-      grantType: "project",
-      nationId: n.id,
-      label,
-      amounts: pc.amounts,
-      breakdown: pc.breakdown,
+      ok: true, grantType: "project", nationId: n.id, label, amounts: pc.amounts, breakdown: pc.breakdown,
       meta: { projectName: pname, ownedProjects: n.projects },
     };
   } catch (e) {
