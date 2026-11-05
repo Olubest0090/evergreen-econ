@@ -1,3 +1,4 @@
+import GrowthGrantPanel from "./GrowthGrantPanel";
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
@@ -135,6 +136,7 @@ export default function GrantsPanel({
 
   return (
     <div className="space-y-3">
+      <GrowthGrantPanel />
       <p className="text-xs text-[var(--muted)]">
         Grants are not deposit balances. They are not collected while the member stays in the
         alliance. When they leave, gov can collect or waive. Records stay here either way.
