@@ -12,8 +12,6 @@ import {
   listGrants,
   collectGrant,
   issueGrant,
-  activeGrantTotalsByNation,
-  formatGrantType,
 } from "@/lib/grants";
 import { fetchSheetCsv } from "@/lib/gsheet";
 import { fetchAllianceHoldings, fetchLatestMarketPrices } from "@/lib/pnw";
@@ -101,8 +99,9 @@ export async function GET(req: Request) {
 
   if (a === "grants") {
     if (!staff.can("members") && !staff.can("balances") && !staff.can("requests")) return noPerm();
-    const status = url.searchParams.get("status") || "";
-    const nationId = Number(url.searchParams.get("nationId") || 0);
+    const gUrl = new URL(req.url);
+    const status = gUrl.searchParams.get("status") || "";
+    const nationId = Number(gUrl.searchParams.get("nationId") || 0);
     try {
       const rows = await listGrants({
         status: status || undefined,
