@@ -302,13 +302,14 @@ async function syncAlliance(opts: {
       console.error("deposit DM failed", e);
     }
     try {
-      void notifyDepositChannel({
+      const ch = await notifyDepositChannel({
         label: mem.leader_name || `Nation #${nationId}`,
         nationId,
         amounts: amounts as Record<string, number>,
         scope: opts.scope,
         note: record.note || undefined,
       });
+      if (!ch.ok) console.error("deposit channel notify failed:", ch.error);
     } catch (e) {
       console.error("deposit channel notify failed", e);
     }

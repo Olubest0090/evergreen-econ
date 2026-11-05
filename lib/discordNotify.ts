@@ -1,25 +1,51 @@
 import { getDiscordBotToken } from "@/lib/secrets";
+import { getSetting } from "@/lib/settings";
 import { RESOURCES } from "@/lib/resources";
 import { marketWorth } from "@/lib/marketWorth";
 
 const API = "https://discord.com/api/v10";
 
-function depositChannelId() {
+type DiscordChannels = {
+  deposit_channel_id?: string;
+  grant_channel_id?: string;
+  econ_role_id?: string;
+};
+
+async function channelConfig(): Promise<DiscordChannels> {
+  try {
+    return await getSetting<DiscordChannels>("discord_channels", {});
+  } catch {
+    return {};
+  }
+}
+
+async function depositChannelId(): Promise<string> {
+  const cfg = await channelConfig();
   return (
+    cfg.deposit_channel_id?.trim() ||
     process.env.DISCORD_DEPOSIT_CHANNEL_ID?.trim() ||
     process.env.DISCORD_ECON_CHANNEL_ID?.trim() ||
     ""
   );
 }
-function grantChannelId() {
+
+async function grantChannelId(): Promise<string> {
+  const cfg = await channelConfig();
   return (
+    cfg.grant_channel_id?.trim() ||
     process.env.DISCORD_GRANT_CHANNEL_ID?.trim() ||
     process.env.DISCORD_ECON_CHANNEL_ID?.trim() ||
     ""
   );
 }
-function roleId() {
-  return process.env.DISCORD_ECON_ROLE_ID?.trim() || "";
+
+async function roleId(): Promise<string> {
+  const cfg = await channelConfig();
+  return (
+    cfg.econ_role_id?.trim() ||
+    process.env.DISCORD_ECON_ROLE_ID?.trim() ||
+    ""
+  );
 }
 
 async function botFetch(path: string, init: RequestInit = {}) {
@@ -35,6 +61,7 @@ async function botFetch(path: string, init: RequestInit = {}) {
   });
   const text = await res.text();
   if (!res.ok) {
+    console.error("discordNotify botFetch failed", path, res.status, text.slice(0, 300));
     return { ok: false as const, error: `Discord ${res.status}: ${text.slice(0, 200)}` };
   }
   return { ok: true as const, json: text ? JSON.parse(text) : null };
@@ -60,11 +87,15 @@ export async function notifyDepositChannel(opts: {
   scope: "main" | "offshore";
   note?: string;
 }) {
-  const ch = depositChannelId();
-  if (!ch) return { ok: false as const, error: "DISCORD_DEPOSIT_CHANNEL_ID not set" };
+  const ch = await depositChannelId();
+  if (!ch) {
+    const err = "DISCORD_DEPOSIT_CHANNEL_ID not set (Vercel env or Gov setting discord_channels.deposit_channel_id)";
+    console.error("notifyDepositChannel:", err);
+    return { ok: false as const, error: err };
+  }
   const worth = await marketWorth(opts.amounts);
   const worthTag = worth ? ` (worth ~${worth.label})` : "";
-  return botFetch(`/channels/${ch}/messages`, {
+  const result = await botFetch(`/channels/${ch}/messages`, {
     method: "POST",
     body: JSON.stringify({
       embeds: [
@@ -80,162 +111,47 @@ export async function notifyDepositChannel(opts: {
           ]
             .filter(Boolean)
             .join("\n"),
-          color: 0x22c55e,
+          color: opts.scope === "main" ? 0x22c55e : 0x3b82f6,
           timestamp: new Date().toISOString(),
-        },
-      ],
-      components: [
-        {
-          type: 1,
-          components: [
-            {
-              type: 2,
-              style: 3,
-              label: "Offshore now",
-              custom_id: "offshore_send_all",
-            },
-          ],
         },
       ],
     }),
   });
+  if (!result.ok) console.error("notifyDepositChannel post failed:", result.error);
+  else console.log("notifyDepositChannel ok", ch, opts.nationId);
+  return result;
 }
 
-async function notifyRequest(
-  kind: "grant" | "warchest",
-  opts: {
-    requestId: string;
-    label: string;
-    nationId: number;
-    amounts: Record<string, number>;
-    purpose?: string;
+export async function notifyGrantRequestChannel(opts: {
+  content: string;
+  embeds: unknown[];
+  components?: unknown[];
+}) {
+  const ch = await grantChannelId();
+  if (!ch) {
+    const err = "DISCORD_GRANT_CHANNEL_ID not set";
+    console.error("notifyGrantRequestChannel:", err);
+    return { ok: false as const, error: err };
   }
-) {
-  const ch = grantChannelId();
-  if (!ch) return { ok: false as const, error: "DISCORD_GRANT_CHANNEL_ID not set" };
-  const role = roleId();
-  const title = kind === "grant" ? "GRANT" : "WARCHEST";
-  const content = role
-    ? `<@&${role}> **${title} request** from ${opts.label}`
-    : `**${title} request** from ${opts.label}`;
-  const prefix = kind === "grant" ? "grant_req" : "warchest_req";
-
-  const worth = await marketWorth(opts.amounts);
-  const worthTag = worth ? ` (worth ~${worth.label})` : "";
+  const role = await roleId();
+  const content = role ? `<@&${role}> ${opts.content}` : opts.content;
   return botFetch(`/channels/${ch}/messages`, {
     method: "POST",
     body: JSON.stringify({
-      content: content + (worth ? ` · ~${worth.label}` : ""),
-      embeds: [
-        {
-          title: `${title} request (Requests)${worthTag}`,
-          description: [
-            `**Member:** ${opts.label} (#${opts.nationId})`,
-            await amountsBlock(opts.amounts),
-            opts.purpose ? `**Purpose:** ${opts.purpose}` : null,
-            `**ID:** \`${opts.requestId}\``,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          color: kind === "grant" ? 0xf59e0b : 0x3b82f6,
-          timestamp: new Date().toISOString(),
-        },
-      ],
-      components: [
-        {
-          type: 1,
-          components: [
-            {
-              type: 2,
-              style: 3,
-              label: "Accept",
-              custom_id: `${prefix}_accept:${opts.requestId}`,
-            },
-            {
-              type: 2,
-              style: 4,
-              label: "Reject",
-              custom_id: `${prefix}_reject:${opts.requestId}`,
-            },
-          ],
-        },
-      ],
+      content,
+      embeds: opts.embeds,
+      components: opts.components ?? [],
+      allowed_mentions: role ? { roles: [role] } : undefined,
     }),
   });
 }
 
-export async function notifyGrantRequest(opts: {
-  requestId: string;
-  label: string;
-  nationId: number;
-  amounts: Record<string, number>;
-  purpose?: string;
-}) {
-  return notifyRequest("grant", opts);
-}
-
-export async function notifyWarchestRequest(opts: {
-  requestId: string;
-  label: string;
-  nationId: number;
-  amounts: Record<string, number>;
-  purpose?: string;
-}) {
-  return notifyRequest("warchest", opts);
-}
-
-export async function notifyGrantWithdrawal(opts: {
-  withdrawalId: string;
-  label: string;
-  nationId: number;
-  amounts: Record<string, number>;
-  recipientNationId: number;
-}) {
-  const ch = grantChannelId();
-  if (!ch) return { ok: false as const, error: "DISCORD_GRANT_CHANNEL_ID not set" };
-  const role = roleId();
-  const content = role
-    ? `<@&${role}> **GRANT withdrawal** from ${opts.label}`
-    : `**GRANT withdrawal** from ${opts.label}`;
-
-  const worth = await marketWorth(opts.amounts);
-  const worthTag = worth ? ` (worth ~${worth.label})` : "";
-  return botFetch(`/channels/${ch}/messages`, {
-    method: "POST",
-    body: JSON.stringify({
-      content: content + (worth ? ` · ~${worth.label}` : ""),
-      embeds: [
-        {
-          title: `GRANT withdrawal (Bank)${worthTag}`,
-          description: [
-            `**Member:** ${opts.label} (#${opts.nationId})`,
-            `**Send to:** #${opts.recipientNationId}`,
-            await amountsBlock(opts.amounts),
-            `**ID:** \`${opts.withdrawalId}\``,
-          ].join("\n"),
-          color: 0xf59e0b,
-          timestamp: new Date().toISOString(),
-        },
-      ],
-      components: [
-        {
-          type: 1,
-          components: [
-            {
-              type: 2,
-              style: 3,
-              label: "Accept",
-              custom_id: `grant_accept:${opts.withdrawalId}`,
-            },
-            {
-              type: 2,
-              style: 4,
-              label: "Reject",
-              custom_id: `grant_reject:${opts.withdrawalId}`,
-            },
-          ],
-        },
-      ],
-    }),
-  });
+/** Status for gov diagnostics */
+export async function discordNotifyStatus() {
+  return {
+    depositChannelId: await depositChannelId(),
+    grantChannelId: await grantChannelId(),
+    econRoleId: await roleId(),
+    botToken: !!(await getDiscordBotToken()),
+  };
 }
