@@ -22,7 +22,7 @@ export async function GET(req: Request) {
   }
 
   try {
-    const result = await syncBankrecs({ minIntervalMs: 120_000 });
+    const result = await syncBankrecs({ minIntervalMs: 50_000, force: false });
     let autoOffshore: { ran: boolean; reason: string; record?: string | null } | null = null;
     try {
       autoOffshore = await maybeRunAutoOffshore();
@@ -35,11 +35,9 @@ export async function GET(req: Request) {
     }
     return NextResponse.json({ ok: true, ...result, autoOffshore });
   } catch (error) {
-    console.error("bank-deposits cron:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Sync failed" },
-      { status: 502 }
-    );
+    const msg = error instanceof Error ? error.message : "Sync failed";
+    console.error("bank-deposits cron:", msg);
+    return NextResponse.json({ ok: false, error: msg }, { status: 502 });
   }
 }
 
