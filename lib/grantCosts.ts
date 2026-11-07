@@ -14,37 +14,45 @@ export type NationGrowth = {
 };
 
 export const PROJECT_COSTS: Record<string, Partial<Record<string, number>>> = {
-  // Verified against in-game / wiki (Nov 2026)
+  "Ironworks": { money: 10_000_000, coal: 500, iron: 500, oil: 500, bauxite: 500, lead: 500 },
+  "Bauxiteworks": { money: 10_000_000, coal: 500, iron: 500, oil: 500, bauxite: 500, lead: 500 },
+  "Arms Stockpile": { money: 10_000_000, coal: 500, iron: 500, oil: 500, bauxite: 500, lead: 500 },
+  "Emergency Gasoline Reserve": { money: 10_000_000, coal: 500, iron: 500, oil: 500, bauxite: 500, lead: 500 },
+  "Mass Irrigation": { money: 10_000_000, food: 50_000, coal: 500, iron: 500, oil: 500, bauxite: 500, lead: 500 },
+  "International Trade Center": { money: 50_000_000, aluminum: 10_000 },
+  "Missile Launch Pad": { money: 15_000_000, munitions: 5000, gasoline: 5000, aluminum: 5000 },
+  "Nuclear Research Facility": { money: 75_000_000, uranium: 5000, gasoline: 5000, aluminum: 5000 },
+  "Iron Dome": { money: 15_000_000, munitions: 5000 },
+  "Vital Defense System": { money: 40_000_000, steel: 5000, aluminum: 5000, munitions: 5000, gasoline: 5000 },
   "Intelligence Agency": { money: 5_000_000, steel: 500, gasoline: 500 },
-  "Ironworks": { money: 10_000_000, coal: 500, iron: 500, steel: 500, aluminum: 500, munitions: 500 },
-  "Bauxiteworks": { money: 10_000_000, bauxite: 500, aluminum: 500 },
-  "Arms Stockpile": { money: 10_000_000, munitions: 500, steel: 500 },
-  "Emergency Gasoline Reserve": { money: 10_000_000, gasoline: 500, oil: 500 },
-  "Propaganda Bureau": { money: 15_000_000, aluminum: 5000, munitions: 5000 },
-  "Missile Launch Pad": { money: 15_000_000, aluminum: 10000, gasoline: 10000, munitions: 10000 },
-  "Iron Dome": { money: 15_000_000, steel: 5000 },
-  "Vital Defense System": { money: 20_000_000, aluminum: 15000, steel: 15000, munitions: 15000 },
   "Center for Civil Engineering": { money: 3_000_000, oil: 1000, iron: 1000, bauxite: 1000 },
-  "Advanced Engineering Corps": { money: 50_000_000, uranium: 10000, munitions: 20000, gasoline: 20000 },
-  "Government Support Agency": { money: 20_000_000, aluminum: 10000, food: 200000 },
-  "International Trade Center": { money: 50_000_000, aluminum: 10000 },
-  "Space Program": { money: 50_000_000, aluminum: 20000, uranium: 10000 },
-  "Spy Satellite": { money: 20_000_000, oil: 10000, uranium: 10000, aluminum: 10000 },
-  "Moon Landing": { money: 50_000_000, aluminum: 20000, uranium: 10000 },
-  "Nuclear Research Facility": { money: 75_000_000, uranium: 5000 },
-  "Pirate Economy": { money: 25_000_000, steel: 10000, aluminum: 10000 },
-  "Recycling Initiative": { money: 10_000_000, food: 100000 },
-  "Telecommunications Satellite": { money: 50_000_000, aluminum: 10000, uranium: 10000 },
-  "Green Technologies": { money: 25_000_000, food: 100000, uranium: 10000 },
-  "Clinical Research Center": { money: 10_000_000, food: 100000 },
-  "Arable Land Agency": { money: 10_000_000, food: 100000 },
-  "Activity Center": { money: 10_000_000 },
-  "Guiding Satellite": { money: 200_000_000, oil: 40000, uranium: 40000, aluminum: 40000, munitions: 20000 },
-  // Planning projects were retired in econ update — kept only if still present on old nations
-  "Urban Planning": { coal: 10000, oil: 10000, aluminum: 20000, munitions: 10000, gasoline: 10000, food: 1_000_000 },
-  "Advanced Urban Planning": { coal: 10000, oil: 10000, uranium: 10000, aluminum: 20000, munitions: 10000, gasoline: 10000, food: 1_000_000 },
-  "Metropolitan Planning": { coal: 20000, oil: 20000, uranium: 10000, aluminum: 40000, munitions: 20000, gasoline: 20000, food: 2_000_000 },
+  "Propaganda Bureau": { money: 10_000_000, gasoline: 2000, munitions: 2000, aluminum: 2000, steel: 2000 },
+  "Uranium Enrichment Program": { money: 25_000_000, uranium: 2500, coal: 500, iron: 500, oil: 500, bauxite: 500, lead: 500 },
+  "Urban Planning": { oil: 4000, bauxite: 4000, iron: 4000, lead: 4000, coal: 4000, food: 250_000, uranium: 12_000 },
+  "Advanced Urban Planning": { oil: 8000, bauxite: 8000, iron: 8000, lead: 8000, coal: 8000, food: 500_000, uranium: 24_000 },
+  "Metropolitan Planning": { oil: 12_000, bauxite: 12_000, iron: 12_000, lead: 12_000, coal: 12_000, food: 750_000, uranium: 36_000 },
+  "Space Program": { money: 50_000_000, aluminum: 25_000 },
+  "Spy Satellite": { money: 20_000_000, oil: 10_000, bauxite: 10_000, iron: 10_000, lead: 10_000, coal: 10_000 },
+  "Moon Landing": { money: 50_000_000, oil: 5000, munitions: 5000, gasoline: 5000, steel: 5000, aluminum: 5000, uranium: 10_000 },
+  "Pirate Economy": { money: 25_000_000, coal: 7500, iron: 7500, oil: 7500, bauxite: 7500, lead: 7500 },
+  "Recycling Initiative": { money: 10_000_000, food: 100_000 },
+  "Telecommunications Satellite": { money: 300_000_000, uranium: 10_000, iron: 10_000, oil: 10_000, aluminum: 10_000 },
+  "Green Technologies": { money: 50_000_000, food: 100_000, aluminum: 10_000, iron: 10_000, oil: 10_000 },
+  "Arable Land Agency": { money: 3_000_000, coal: 1500, lead: 1500 },
+  "Clinical Research Center": { money: 10_000_000, food: 100_000 },
+  "Specialized Police Training Program": { money: 50_000_000, food: 250_000, aluminum: 5000 },
+  "Advanced Engineering Corps": { money: 50_000_000, uranium: 1000, munitions: 10_000, gasoline: 10_000 },
+  "Government Support Agency": { money: 20_000_000, food: 200_000, aluminum: 10_000 },
+  "Research and Development Center": { money: 50_000_000, uranium: 1000, aluminum: 5000, food: 100_000 },
+  "Activity Center": { money: 500_000, food: 1000 },
+  "Military Salvage": { money: 20_000_000, aluminum: 5000, steel: 5000, gasoline: 5000 },
+  "Fallout Shelter": { money: 25_000_000, food: 100_000, lead: 10_000, aluminum: 15_000, steel: 10_000 },
+  "Bureau of Domestic Affairs": { money: 20_000_000, food: 500_000, coal: 8000, bauxite: 8000, lead: 8000, iron: 8000, oil: 8000 },
+  "Advanced Pirate Economy": { money: 50_000_000, coal: 10_000, iron: 10_000, oil: 10_000, bauxite: 10_000, lead: 10_000 },
+  "Mars Landing": { money: 200_000_000, oil: 20_000, aluminum: 20_000 },
+  "Guiding Satellite": { money: 200_000_000, oil: 40_000, uranium: 40_000, aluminum: 40_000, munitions: 20_000 },
 };
+
 
 function normProject(s: string): string {
   return s.trim().toLowerCase().replace(/_/g, " ");
@@ -70,40 +78,32 @@ export function findProjectCost(name: string): Partial<Record<string, number>> |
  * CityToBuy = city number being purchased (currentCities + 1 for next).
  * Planning projects (UP/AUP/MP) were retired — no flat $ discounts.
  */
-export function nextCityCostRaw(cityToBuy: number, top20Average: number): number {
-  const n = Math.max(1, cityToBuy);
-  const avg = Math.max(1, top20Average);
-  const shifted = n - avg / 4;
-  const cubic = 100_000 * Math.pow(shifted, 3) + 150_000 * shifted + 75_000;
-  const floor = n * n * 100_000;
-  return Math.max(cubic, floor);
+/**
+ * Locutus PW.City.nextCityCost — exact in-game formula.
+ */
+export function nextCityCostRaw(currentCities: number, top20Average: number): number {
+  const n = currentCities + 1;
+  const top20AverageQuarter = top20Average * 0.25;
+  const cubic =
+    100_000 * Math.pow(n - top20AverageQuarter, 3) +
+    150_000 * (n - top20AverageQuarter) +
+    75_000;
+  const floor = Math.pow(n, 2) * 100_000;
+  return Math.max(floor, cubic);
 }
 
-/** Cached / overrideable top-20% city average (from game or settings). */
 let _top20Cache: { value: number; at: number } | null = null;
 
 export async function getTop20CityAverage(): Promise<number> {
-  // Allow staff override via econ_settings
   try {
     const { getSetting } = await import("@/lib/settings");
     const override = await getSetting<number | null>("city_cost_top20_avg", null);
     if (typeof override === "number" && override > 0) return override;
-  } catch {
-    /* ignore */
-  }
-  if (_top20Cache && Date.now() - _top20Cache.at < 6 * 60 * 60 * 1000) {
-    return _top20Cache.value;
-  }
-  // Estimate: average num_cities of top nations by score (proxy for top 20%)
+  } catch { /* ignore */ }
+  if (_top20Cache && Date.now() - _top20Cache.at < 6 * 60 * 60 * 1000) return _top20Cache.value;
   try {
-    const data = await gql<{
-      nations: { data: { num_cities: number }[]; paginatorInfo?: { total?: number } };
-    }>(
-      `query {
-        nations(first: 50, orderBy: [{ column: SCORE, order: DESC }]) {
-          data { num_cities }
-        }
-      }`,
+    const data = await gql<{ nations: { data: { num_cities: number }[] } }>(
+      `query { nations(first: 50, orderBy: [{ column: SCORE, order: DESC }]) { data { num_cities } } }`,
       {}
     );
     const rows = data.nations?.data ?? [];
@@ -114,10 +114,7 @@ export async function getTop20CityAverage(): Promise<number> {
         return avg;
       }
     }
-  } catch {
-    /* fall through */
-  }
-  // Fallback near live value from city/create page (~43.6 in Nov 2026)
+  } catch { /* fall through */ }
   return 43.65;
 }
 
@@ -129,23 +126,32 @@ export function cityGrantCost(
   top20Average: number
 ): { money: number; breakdown: string[] } {
   const proj = new Set(projects.map(normProject));
+  const hasGsa = proj.has(normProject("Government Support Agency"));
+  const hasBda = proj.has(normProject("Bureau of Domestic Affairs"));
+  const pol = (domesticPolicy || "").toLowerCase().replace(/_/g, " ");
+  const hasMd = pol.includes("manifest");
   const breakdown: string[] = [];
   let total = 0;
   let cities = currentCities;
   for (let i = 0; i < citiesToBuy; i++) {
-    const cityToBuy = cities + 1;
-    let cost = nextCityCostRaw(cityToBuy, top20Average);
-    const pol = (domesticPolicy || "").toLowerCase().replace(/_/g, " ");
-    if (pol.includes("manifest")) {
-      const rate = proj.has(normProject("Government Support Agency")) ? 0.075 : 0.05;
-      cost *= 1 - rate;
-      if (i === 0) breakdown.push(`Manifest Destiny −${rate * 100}%`);
+    let cost = nextCityCostRaw(cities, top20Average);
+    if (hasMd) {
+      let factor = 0.05;
+      if (hasGsa) factor += 0.025;
+      if (hasBda) factor += 0.0125;
+      cost *= 1 - factor;
+      if (i === 0) {
+        const bits = ["Manifest Destiny -5%"];
+        if (hasGsa) bits.push("GSA +2.5%");
+        if (hasBda) bits.push("Bureau +1.25%");
+        breakdown.push(bits.join(" · ") + ` (total -${(factor * 100).toFixed(2)}%)`);
+      }
     }
-    total += cost;
+    total += Math.max(1, cost);
     cities += 1;
   }
   total = Math.round(total * 100) / 100;
-  breakdown.push(`Top20 avg cities ≈ ${top20Average.toFixed(2)}`);
+  breakdown.push(`Top20 avg ≈ ${top20Average.toFixed(4)} (Locutus formula)`);
   breakdown.push(`${citiesToBuy} city(ies) from ${currentCities} → ${currentCities + citiesToBuy}`);
   return { money: total, breakdown };
 }
@@ -297,6 +303,7 @@ const PROJECT_GQL_FIELDS: { field: string; name: string }[] = [
   { field: "pirate_economy", name: "Pirate Economy" },
   { field: "clinical_research_center", name: "Clinical Research Center" },
   { field: "government_support_agency", name: "Government Support Agency" },
+  { field: "bureau_of_domestic_affairs", name: "Bureau of Domestic Affairs" },
   { field: "arable_land_agency", name: "Arable Land Agency" },
   { field: "activity_center", name: "Activity Center" },
   { field: "telecommunications_satellite", name: "Telecommunications Satellite" },
