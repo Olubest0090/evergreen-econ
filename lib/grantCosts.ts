@@ -100,22 +100,22 @@ export async function getTop20CityAverage(): Promise<number> {
     const override = await getSetting<number | null>("city_cost_top20_avg", null);
     if (typeof override === "number" && override > 0) return override;
   } catch { /* ignore */ }
-  if (_top20Cache && Date.now() - _top20Cache.at < 6 * 60 * 60 * 1000) return _top20Cache.value;
+  if (_top20Cache && Date.now() - _top20Cache.at < 6 * 60 * 60 * 1000) {
+    return _top20Cache.value;
+  }
+  // Official P&W value (same source Locutus uses) — NOT top nations by score
   try {
-    const data = await gql<{ nations: { data: { num_cities: number }[] } }>(
-      `query { nations(first: 50, orderBy: [{ column: SCORE, order: DESC }]) { data { num_cities } } }`,
+    const data = await gql<{ game_info?: { city_average?: number | null } }>(
+      `query { game_info { city_average } }`,
       {}
     );
-    const rows = data.nations?.data ?? [];
-    if (rows.length >= 10) {
-      const avg = rows.reduce((s, r) => s + Number(r.num_cities || 0), 0) / rows.length;
-      if (avg > 5) {
-        _top20Cache = { value: avg, at: Date.now() };
-        return avg;
-      }
+    const avg = Number(data.game_info?.city_average);
+    if (Number.isFinite(avg) && avg > 1) {
+      _top20Cache = { value: avg, at: Date.now() };
+      return avg;
     }
   } catch { /* fall through */ }
-  return 43.65;
+  return 43.6452; // last known from city/create page
 }
 
 export function cityGrantCost(
@@ -156,16 +156,27 @@ export function cityGrantCost(
   return { money: total, breakdown };
 }
 
+
+/** Locutus: 300 + max(infra-10, 20)^2.2 * (1/710) */
 function infraUnitCost(infra: number): number {
-  return Math.pow(Math.abs(infra - 10), 2.2) / 710 + 300;
+  const x = Math.max(infra - 10, 20);
+  return 300 + Math.pow(x, 2.2) * (1 / 710);
 }
 
-export function infraCostRange(startInfra: number, endInfra: number): number {
-  if (endInfra <= startInfra) return 0;
+/**
+ * Locutus PW.City.Infra.calculateInfra — integrate in 100-infra steps.
+ * Cost is the unit price at the *start* of each chunk.
+ */
+export function infraCostRange(from: number, to: number): number {
+  if (from < 0) from = 0;
+  if (to <= from) return 0;
+  // Integrate like Locutus (cents / 100-infra chunks)
   let total = 0;
-  for (let x = startInfra; x < endInfra; x += 1) {
-    const chunk = Math.min(1, endInfra - x);
-    total += infraUnitCost(x) * chunk;
+  let i = from;
+  while (i < to) {
+    const chunk = Math.min(100, to - i);
+    total += infraUnitCost(i) * chunk;
+    i += chunk;
   }
   return total;
 }
@@ -177,37 +188,69 @@ export function infraGrantCost(
   domesticPolicy: string | null
 ): { money: number; breakdown: string[] } {
   const proj = new Set(projects.map(normProject));
+  const hasAec = proj.has(normProject("Advanced Engineering Corps"));
+  const hasCfce = proj.has(normProject("Center for Civil Engineering"));
+  const hasGsa = proj.has(normProject("Government Support Agency"));
+  const hasBda = proj.has(normProject("Bureau of Domestic Affairs"));
+  const pol = (domesticPolicy || "").toLowerCase().replace(/_/g, " ");
+  const hasUrban = pol.includes("urbanization");
+
+  // Locutus factor: AEC -5%, CFCE -5%, Urbanization -5% (+GSA 2.5%, +BDA 1.25%)
+  let factor = 1;
+  const notes: string[] = [];
+  if (hasAec) {
+    factor -= 0.05;
+    notes.push("AEC -5%");
+  }
+  if (hasCfce) {
+    factor -= 0.05;
+    notes.push("CFCE -5%");
+  }
+  if (hasUrban) {
+    factor -= 0.05;
+    notes.push("Urbanization -5%");
+    if (hasGsa) {
+      factor -= 0.025;
+      notes.push("GSA +2.5%");
+    }
+    if (hasBda) {
+      factor -= 0.0125;
+      notes.push("Bureau +1.25%");
+    }
+  }
+
   let total = 0;
-  const breakdown: string[] = [];
+  let n = 0;
   for (const c of cities) {
     const from = Number(c.infrastructure) || 0;
     if (from >= targetInfra) continue;
-    total += infraCostRange(from, targetInfra);
-  }
-  if (proj.has(normProject("Center for Civil Engineering"))) {
-    total *= 0.95;
-    breakdown.push("Center for Civil Engineering -5%");
-  }
-  const pol = (domesticPolicy || "").toLowerCase();
-  if (pol.includes("urbanization")) {
-    total *= 0.95;
-    breakdown.push("Urbanization policy -5%");
+    total += infraCostRange(from, targetInfra) * factor;
+    n++;
   }
   total = Math.round(total * 100) / 100;
-  breakdown.push(`Infra up to ${targetInfra} on ${cities.length} city(ies)`);
+  const breakdown = [
+    ...notes,
+    `Infra up to ${targetInfra} on ${n} city(ies)`,
+    `Discount factor ×${factor.toFixed(4)}`,
+  ];
   return { money: total, breakdown };
 }
 
+/** Locutus: 0.002 * max(20, land-20)^2 + 50 */
 function landUnitCost(land: number): number {
-  return 0.002 * Math.pow(land - 20, 2) + 50;
+  return 0.002 * Math.pow(Math.max(20, land - 20), 2) + 50;
 }
 
-export function landCostRange(startLand: number, endLand: number): number {
-  if (endLand <= startLand) return 0;
+/**
+ * Locutus PW.City.Land.calculateLand — 500-land steps.
+ */
+export function landCostRange(from: number, to: number): number {
+  if (from < 0) from = 0;
+  if (to <= from) return 0;
   let total = 0;
-  for (let x = startLand; x < endLand; x += 1) {
-    const chunk = Math.min(1, endLand - x);
-    total += landUnitCost(x) * chunk;
+  for (let i = from; i < to; i += 500) {
+    const amt = Math.min(500, to - i);
+    total += landUnitCost(i) * amt;
   }
   return total;
 }
@@ -215,19 +258,58 @@ export function landCostRange(startLand: number, endLand: number): number {
 export function landGrantCost(
   cities: { land: number }[],
   targetLand: number,
+  projects: string[],
   domesticPolicy: string | null
 ): { money: number; breakdown: string[] } {
+  const proj = new Set(projects.map(normProject));
+  const hasAec = proj.has(normProject("Advanced Engineering Corps"));
+  const hasAla = proj.has(normProject("Arable Land Agency"));
+  const hasGsa = proj.has(normProject("Government Support Agency"));
+  const hasBda = proj.has(normProject("Bureau of Domestic Affairs"));
+  const pol = (domesticPolicy || "").toLowerCase().replace(/_/g, " ");
+  // Land uses Rapid Expansion policy (not MD)
+  const hasRa = pol.includes("rapid expansion") || pol.includes("rapid_expansion");
+
+  let factor = 1;
+  const notes: string[] = [];
+  if (hasAec) {
+    factor -= 0.05;
+    notes.push("AEC -5%");
+  }
+  if (hasAla) {
+    factor -= 0.05;
+    notes.push("Arable Land Agency -5%");
+  }
+  if (hasRa) {
+    factor -= 0.05;
+    notes.push("Rapid Expansion -5%");
+    if (hasGsa) {
+      factor -= 0.025;
+      notes.push("GSA +2.5%");
+    }
+    if (hasBda) {
+      factor -= 0.0125;
+      notes.push("Bureau +1.25%");
+    }
+  }
+
   let total = 0;
+  let n = 0;
   for (const c of cities) {
     const from = Number(c.land) || 0;
     if (from >= targetLand) continue;
-    total += landCostRange(from, targetLand);
+    total += landCostRange(from, targetLand) * factor;
+    n++;
   }
-  const pol = (domesticPolicy || "").toLowerCase();
-  if (pol.includes("rapid expansion")) total *= 0.95;
   total = Math.round(total * 100) / 100;
-  return { money: total, breakdown: [`Land up to ${targetLand} on ${cities.length} city(ies)`] };
+  const breakdown = [
+    ...notes,
+    `Land up to ${targetLand} on ${n} city(ies)`,
+    `Discount factor ×${factor.toFixed(4)}`,
+  ];
+  return { money: total, breakdown };
 }
+
 
 export function projectGrantCost(
   projectName: string,
@@ -436,7 +518,7 @@ export async function quoteGrowthGrant(input: {
     if (input.grantType === "land") {
       const target = Number(input.targetLand);
       if (!Number.isFinite(target) || target <= 0) return { ok: false, error: "Enter target land level" };
-      const { money, breakdown } = landGrantCost(selectedCities, target, n.domestic_policy);
+      const { money, breakdown } = landGrantCost(selectedCities, target, n.projects, n.domestic_policy);
       breakdown.unshift(`Cities: ${selectedCities.map((c) => "#" + c.id + " (" + c.land + " land)").join(", ")}`);
       return {
         ok: true, grantType: "land", nationId: n.id, label, amounts: { money }, breakdown,
