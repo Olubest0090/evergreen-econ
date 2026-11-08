@@ -30,15 +30,24 @@ export async function GET() {
     return err("No permission", 403);
   }
   const supa = db();
-  const { data: members } = await supa
-    .from("econ_members")
-    .select("id, nation_id, leader_name, discord_username, status")
-    .eq("status", "active")
-    .order("leader_name")
-    .limit(500);
+  const [{ data: members }, { data: history }] = await Promise.all([
+    supa
+      .from("econ_members")
+      .select("id, nation_id, leader_name, discord_username, status")
+      .eq("status", "active")
+      .order("leader_name")
+      .limit(500),
+    supa
+      .from("econ_audit_log")
+      .select("id, actor_discord_id, action, details, created_at")
+      .in("action", ["gov_send", "gov_send_failed", "gov_send_ledger_failed"])
+      .order("created_at", { ascending: false })
+      .limit(50),
+  ]);
   return NextResponse.json({
     members: members ?? [],
     resources: RESOURCES,
+    history: history ?? [],
   });
 }
 

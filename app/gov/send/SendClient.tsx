@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { RESOURCES, LABEL } from "@/lib/resources";
 
 type Mem = {
@@ -11,8 +11,36 @@ type Mem = {
   status: string;
 };
 
+type HistRow = {
+  id: string;
+  actor_discord_id: string | null;
+  action: string;
+  details: {
+    from?: string;
+    receiver?: number;
+    receiverType?: string;
+    amounts?: Record<string, number>;
+    note?: string;
+    memberId?: string | null;
+    memberNation?: number | null;
+    bankRecord?: string | number | null;
+    depositDebited?: boolean;
+    error?: string;
+  } | null;
+  created_at: string;
+};
+
+function fmtAmt(amounts?: Record<string, number> | null) {
+  if (!amounts) return "—";
+  return Object.entries(amounts)
+    .filter(([, v]) => Number(v) > 0)
+    .map(([k, v]) => `${LABEL[k as keyof typeof LABEL] || k} ${Number(v).toLocaleString()}`)
+    .join(", ");
+}
+
 export default function SendClient() {
   const [members, setMembers] = useState<Mem[]>([]);
+  const [history, setHistory] = useState<HistRow[]>([]);
   const [from, setFrom] = useState<"offshore" | "main">("offshore");
   const [receiverType, setReceiverType] = useState<"nation" | "alliance">("nation");
   const [receiverId, setReceiverId] = useState("");
@@ -22,15 +50,23 @@ export default function SendClient() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/gov/send", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((j) => {
-        if (j.error) setMsg(j.error);
-        else setMembers(j.members || []);
-      })
-      .catch(() => setMsg("Could not load"));
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/gov/send", { cache: "no-store" });
+      const j = await r.json();
+      if (j.error) setMsg(j.error);
+      else {
+        setMembers(j.members || []);
+        setHistory(j.history || []);
+      }
+    } catch {
+      setMsg("Could not load");
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function send() {
     setMsg("");
@@ -66,19 +102,20 @@ export default function SendClient() {
           receiverType,
           receiverId: Number(receiverId),
           memberId: memberId || null,
+          note,
           amounts,
-          note: note || "Gov send",
           confirm: "SEND",
         }),
       });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || "Send failed");
+      const j = await res.json();
+      if (!res.ok || j.error) throw new Error(j.error || "Send failed");
       setMsg(
         j.warning
           ? j.warning
-          : `Sent. Bank record #${j.record ?? "?"}${j.debited ? " · deposit debited" : " · no deposit debited"}`
+          : `Sent. Bank record #${j.record ?? "?"}${j.debited ? " · deposit debited" : ""}`
       );
       setVals({});
+      await load();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Send failed");
     } finally {
@@ -158,17 +195,17 @@ export default function SendClient() {
         </label>
 
         <label className="block text-xs text-[var(--muted)]">
-          Note (in-game, max 50)
+          Note
           <input
             className="input mt-1"
             maxLength={50}
-            placeholder="Gov send"
+            placeholder="Optional note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
           />
         </label>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {RESOURCES.map((r) => (
             <label key={r} className="block text-[11px] text-[var(--muted)]">
               {LABEL[r] || r}
@@ -177,7 +214,7 @@ export default function SendClient() {
                 inputMode="decimal"
                 placeholder="0"
                 value={vals[r] || ""}
-                onChange={(e) => setVals((v) => ({ ...v, [r]: e.target.value }))}
+                onChange={(e) => setVals((prev) => ({ ...prev, [r]: e.target.value }))}
               />
             </label>
           ))}
@@ -186,6 +223,68 @@ export default function SendClient() {
         <button type="button" className="btn w-full" disabled={busy} onClick={() => void send()}>
           {busy ? "Sending…" : "Send"}
         </button>
+      </div>
+
+      {/* History of all Send-page transactions */}
+      <div className="card space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">Send history</h2>
+          <button
+            type="button"
+            className="text-[11px] text-[var(--muted)] underline"
+            disabled={busy}
+            onClick={() => void load()}
+          >
+            Refresh
+          </button>
+        </div>
+        <p className="text-[11px] text-[var(--muted)]">
+          Last 50 sends from this tool (success and failed).
+        </p>
+
+        {history.length === 0 ? (
+          <p className="text-xs text-[var(--muted)]">No sends recorded yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {history.map((h) => {
+              const d = h.details || {};
+              const ok = h.action === "gov_send";
+              const failed = h.action !== "gov_send";
+              return (
+                <li
+                  key={h.id}
+                  className="rounded-xl border border-[var(--border)] bg-black/20 px-3 py-2 text-[11px] leading-relaxed"
+                >
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className={ok ? "font-semibold text-[var(--accent)]" : "font-semibold text-[var(--danger)]"}>
+                      {ok ? "Sent" : h.action === "gov_send_ledger_failed" ? "Sent · ledger fail" : "Failed"}
+                    </span>
+                    <span className="text-[var(--muted)]">
+                      {new Date(h.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                  <div>
+                    {(d.from === "source" ? "Main" : "Offshore")} →{" "}
+                    {d.receiverType || "?"} #{d.receiver ?? "?"}
+                    {d.bankRecord != null ? ` · bank #${d.bankRecord}` : ""}
+                  </div>
+                  <div className="text-[var(--text)]">{fmtAmt(d.amounts)}</div>
+                  {d.note ? <div className="text-[var(--muted)]">Note: {d.note}</div> : null}
+                  {d.depositDebited || d.memberNation ? (
+                    <div className="text-[var(--muted)]">
+                      Deposit debit: nation #{d.memberNation ?? "?"}
+                    </div>
+                  ) : (
+                    <div className="text-[var(--muted)]">Alliance bank only (no deposit debit)</div>
+                  )}
+                  {failed && d.error ? (
+                    <div className="text-[var(--danger)]">Error: {d.error}</div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     </main>
   );
