@@ -55,6 +55,28 @@ type Payload = {
   recentFails: FailRow[];
   recentLogs: LogRow[];
   adminActions: AdminRow[];
+  financial?: {
+    thresholds: {
+      large_withdrawal_money: number;
+      large_adjust_money: number;
+      max_pending_withdrawals_per_member: number;
+    };
+    integrity: {
+      negativeBalances: { member_id: string; resource: string; balance: number }[];
+      openWithdrawals: number;
+      recentAlerts: number;
+      ledgerOrphans: number;
+    };
+    alerts: {
+      id: number;
+      severity: string;
+      kind: string;
+      member_id: string | null;
+      nation_id: number | null;
+      detail: Record<string, unknown>;
+      created_at: string;
+    }[];
+  };
 };
 
 type Tab =
@@ -63,6 +85,7 @@ type Tab =
   | "events"
   | "access"
   | "admin"
+  | "financial"
   | "lockdown";
 
 const TABS: [Tab, string][] = [
@@ -71,6 +94,7 @@ const TABS: [Tab, string][] = [
   ["events", "Events"],
   ["access", "Access logs"],
   ["admin", "Admin trail"],
+  ["financial", "Financial"],
   ["lockdown", "Emergency"],
 ];
 
@@ -366,6 +390,96 @@ export default function SecurityClient() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+
+      {tab === "financial" && data.financial && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="card !p-3">
+              <p className="text-[11px] text-[var(--muted)]">Open withdrawals</p>
+              <p className="text-2xl font-bold">{data.financial.integrity.openWithdrawals}</p>
+            </div>
+            <div className="card !p-3">
+              <p className="text-[11px] text-[var(--muted)]">Neg. balances</p>
+              <p className="text-2xl font-bold">{data.financial.integrity.negativeBalances.length}</p>
+            </div>
+            <div className="card !p-3">
+              <p className="text-[11px] text-[var(--muted)]">Alerts (24h)</p>
+              <p className="text-2xl font-bold">{data.financial.integrity.recentAlerts}</p>
+            </div>
+            <div className="card !p-3">
+              <p className="text-[11px] text-[var(--muted)]">Ledger orphans</p>
+              <p className="text-2xl font-bold">{data.financial.integrity.ledgerOrphans}</p>
+            </div>
+          </div>
+          <div className="card space-y-1 text-xs">
+            <h2 className="font-semibold">Thresholds</h2>
+            <p>Large withdrawal ≥ ${data.financial.thresholds.large_withdrawal_money.toLocaleString()}</p>
+            <p>Large adjust ≥ ${data.financial.thresholds.large_adjust_money.toLocaleString()}</p>
+            <p>Max open withdrawals / member: {data.financial.thresholds.max_pending_withdrawals_per_member}</p>
+            <button
+              type="button"
+              className="btn-ghost mt-2"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await fetch("/api/owner/security", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "run_integrity_scan" }),
+                  });
+                  const j = await r.json();
+                  if (!r.ok) throw new Error(j.error || "Scan failed");
+                  setMsg("Integrity scan complete");
+                  await load();
+                } catch (e) {
+                  setMsg(e instanceof Error ? e.message : "Scan failed");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Run integrity scan now
+            </button>
+          </div>
+          {data.financial.integrity.negativeBalances.length > 0 && (
+            <div className="card space-y-1 text-xs">
+              <h2 className="font-semibold text-[var(--danger)]">Negative balances</h2>
+              <ul className="space-y-1">
+                {data.financial.integrity.negativeBalances.slice(0, 30).map((n, i) => (
+                  <li key={i} className="font-mono">
+                    {n.member_id.slice(0, 8)}… · {n.resource} · {n.balance}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="card space-y-2">
+            <h2 className="font-semibold">Financial alerts</h2>
+            {data.financial.alerts.length === 0 ? (
+              <p className="text-xs text-[var(--muted)]">None yet.</p>
+            ) : (
+              <ul className="max-h-[24rem] space-y-2 overflow-y-auto text-[11px]">
+                {data.financial.alerts.map((a) => (
+                  <li key={a.id} className="rounded-lg border border-[var(--border)] bg-black/20 px-2 py-1.5">
+                    <div className="flex justify-between gap-2">
+                      <span className={a.severity === "critical" ? "text-[var(--danger)]" : a.severity === "warning" ? "text-[var(--gold)]" : ""}>
+                        {a.severity} · {a.kind}
+                      </span>
+                      <span className="text-[var(--muted)]">{when(a.created_at)}</span>
+                    </div>
+                    <div className="text-[var(--muted)]">
+                      member {a.member_id ? a.member_id.slice(0, 8) + "…" : "—"}
+                      {a.nation_id ? ` · nation #${a.nation_id}` : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
 

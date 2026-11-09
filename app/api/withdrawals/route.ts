@@ -5,6 +5,11 @@ import { cleanAmounts, LABEL } from "@/lib/resources";
 import { getSetting } from "@/lib/settings";
 import { bankWithdraw, type BankAmounts } from "@/lib/pnwBank";
 import { notifyGrantWithdrawal } from "@/lib/discordNotify";
+import {
+  assertNoConcurrentWithdrawal,
+  flagLargeWithdrawal,
+} from "@/lib/financialSecurity";
+import { lockdownBlocks } from "@/lib/securityCore";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -216,6 +221,12 @@ export async function POST(req: Request) {
   const amounts = cleanAmounts(body.amounts);
   if (!amounts) return NextResponse.json({ error: "Enter at least one amount" }, { status: 400 });
 
+  const lockedWd = await lockdownBlocks("withdrawals");
+  if (lockedWd) {
+    return NextResponse.json({ error: lockedWd }, { status: 423 });
+  }
+
+
   const tag = String(body.tag || "")
     .trim()
     .toUpperCase();
@@ -250,6 +261,11 @@ export async function POST(req: Request) {
   });
 
   if (tag === "DEPOSIT") {
+    const concurrent = await assertNoConcurrentWithdrawal(me.id);
+    if (!concurrent.ok) {
+      return NextResponse.json({ error: concurrent.error }, { status: 409 });
+    }
+
     const { data, error } = await db().rpc("econ_request_withdrawal", {
       p_member: me.id,
       p_amounts: amounts,
@@ -283,6 +299,14 @@ export async function POST(req: Request) {
     } catch {
       /* column may not exist */
     }
+
+    void flagLargeWithdrawal({
+      memberId: me.id,
+      nationId: Number(me.nationId),
+      amounts: amounts as Record<string, number>,
+      tag: "DEPOSIT",
+      withdrawalId,
+    });
 
     if (!withdrawalId) {
       return NextResponse.json({

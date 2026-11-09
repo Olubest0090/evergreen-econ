@@ -17,6 +17,7 @@ import { fetchSheetCsv } from "@/lib/gsheet";
 import { fetchAllianceHoldings, fetchLatestMarketPrices } from "@/lib/pnw";
 import { rejectIfLocked } from "@/lib/lockdownGate";
 import { logSecurityEvent } from "@/lib/securityCore";
+import { flagLargeAdjustment } from "@/lib/financialSecurity";
 import { makeDepositCode, sendDepositConfirmation } from "@/lib/depositNotify";
 
 export const dynamic = "force-dynamic";
@@ -833,6 +834,12 @@ export async function POST(req: Request) {
         });
       }
     }
+    void flagLargeAdjustment({
+      memberId: String(body.memberId || ""),
+      amounts: (body.amounts || body.deltas || {}) as Record<string, number>,
+      staffDiscordId: staff.discordId,
+      note: String(body.note || ""),
+    });
     return NextResponse.json({ ok: true });
   }
 

@@ -6,6 +6,11 @@ import {
   logSecurityEvent,
   type LockdownFlags,
 } from "@/lib/securityCore";
+import {
+  getFinancialThresholds,
+  listFinancialAlerts,
+  runIntegrityScan,
+} from "@/lib/financialSecurity";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +28,9 @@ export async function GET() {
 
   const [
     lockdown,
+    thresholds,
+    integrity,
+    financialAlerts,
     { count: reqToday },
     { count: failLoginsToday },
     { count: okLoginsToday },
@@ -35,36 +43,21 @@ export async function GET() {
     { data: adminActions },
   ] = await Promise.all([
     getLockdown(),
+    getFinancialThresholds(),
+    runIntegrityScan(),
+    listFinancialAlerts(40),
     supa.from("econ_security_logs").select("id", { count: "exact", head: true }).gte("created_at", since),
     supa.from("econ_login_attempts").select("id", { count: "exact", head: true }).eq("success", false).gte("created_at", since),
     supa.from("econ_login_attempts").select("id", { count: "exact", head: true }).eq("success", true).gte("created_at", since),
     supa.from("econ_security_events").select("id", { count: "exact", head: true }).eq("kind", "cron_denied").gte("created_at", week),
     supa.from("econ_security_events").select("id", { count: "exact", head: true }).eq("kind", "lockdown_block").gte("created_at", week),
     supa.from("econ_security_events").select("id", { count: "exact", head: true }).eq("kind", "perm_denied").gte("created_at", week),
-    supa
-      .from("econ_security_events")
-      .select("id, kind, ip_address, discord_id, path, detail, created_at")
-      .order("created_at", { ascending: false })
-      .limit(40),
-    supa
-      .from("econ_login_attempts")
-      .select("id, ip_address, discord_id, success, reason, created_at")
-      .eq("success", false)
-      .order("created_at", { ascending: false })
-      .limit(40),
-    supa
-      .from("econ_security_logs")
-      .select("id, ip_address, method, path, user_agent, created_at")
-      .order("created_at", { ascending: false })
-      .limit(80),
-    supa
-      .from("econ_audit_log")
-      .select("id, actor_discord_id, action, details, created_at")
-      .order("created_at", { ascending: false })
-      .limit(40),
+    supa.from("econ_security_events").select("id, kind, ip_address, discord_id, path, detail, created_at").order("created_at", { ascending: false }).limit(40),
+    supa.from("econ_login_attempts").select("id, ip_address, discord_id, success, reason, created_at").eq("success", false).order("created_at", { ascending: false }).limit(40),
+    supa.from("econ_security_logs").select("id, ip_address, method, path, user_agent, created_at").order("created_at", { ascending: false }).limit(80),
+    supa.from("econ_audit_log").select("id, actor_discord_id, action, details, created_at").order("created_at", { ascending: false }).limit(40),
   ]);
 
-  // Top IPs by failed login (24h)
   const { data: failRows } = await supa
     .from("econ_login_attempts")
     .select("ip_address")
@@ -88,19 +81,22 @@ export async function GET() {
   const cronSecretSet = !!(process.env.CRON_SECRET && process.env.CRON_SECRET.trim().length >= 16);
   const authSecretSet = !!(process.env.AUTH_SECRET && process.env.AUTH_SECRET.length >= 32);
   const ownerSet = !!(process.env.OWNER_DISCORD_ID && /^\d+$/.test(process.env.OWNER_DISCORD_ID.trim()));
-
   const lockdownOn = Object.values(lockdown).some(Boolean);
 
   const alerts: { level: "critical" | "warning" | "info"; text: string }[] = [];
-  if (!cronSecretSet) alerts.push({ level: "critical", text: "CRON_SECRET missing or too short — cron endpoints stay locked closed." });
-  if (!authSecretSet) alerts.push({ level: "critical", text: "AUTH_SECRET missing or shorter than 32 characters." });
-  if (!ownerSet) alerts.push({ level: "critical", text: "OWNER_DISCORD_ID not set — owner tools will 404 for everyone." });
-  if (lockdownOn) alerts.push({ level: "warning", text: "Emergency lockdown is partially or fully active." });
-  if ((failLoginsToday ?? 0) >= 20) alerts.push({ level: "warning", text: `${failLoginsToday} failed logins today (UTC).` });
-  if ((cronDeniedWeek ?? 0) > 0) alerts.push({ level: "warning", text: `${cronDeniedWeek} denied cron hits this week (wrong/missing secret).` });
-  if (suspiciousIps.some((x) => x.fails >= 8)) {
-    alerts.push({ level: "warning", text: "One or more IPs hit login rate-limit thresholds in the last 24h." });
-  }
+  if (!cronSecretSet) alerts.push({ level: "critical", text: "CRON_SECRET missing or too short." });
+  if (!authSecretSet) alerts.push({ level: "critical", text: "AUTH_SECRET missing or too short." });
+  if (!ownerSet) alerts.push({ level: "critical", text: "OWNER_DISCORD_ID not set." });
+  if (lockdownOn) alerts.push({ level: "warning", text: "Emergency lockdown is active." });
+  if (integrity.negativeBalances.length)
+    alerts.push({
+      level: "critical",
+      text: `${integrity.negativeBalances.length} negative balance row(s) detected.`,
+    });
+  if ((failLoginsToday ?? 0) >= 20)
+    alerts.push({ level: "warning", text: `${failLoginsToday} failed logins today (UTC).` });
+  if ((cronDeniedWeek ?? 0) > 0)
+    alerts.push({ level: "warning", text: `${cronDeniedWeek} denied cron hits this week.` });
   if (alerts.length === 0) alerts.push({ level: "info", text: "No active security alerts." });
 
   let status: "Healthy" | "Warning" | "Critical" = "Healthy";
@@ -127,6 +123,11 @@ export async function GET() {
     recentFails: recentFails ?? [],
     recentLogs: recentLogs ?? [],
     adminActions: adminActions ?? [],
+    financial: {
+      thresholds,
+      integrity,
+      alerts: financialAlerts,
+    },
   });
 }
 
@@ -181,6 +182,11 @@ export async function POST(req: Request) {
       detail: { action: "clear_lockdown" },
     });
     return NextResponse.json({ ok: true, lockdown: cleared });
+  }
+
+  if (action === "run_integrity_scan") {
+    const integrity = await runIntegrityScan();
+    return NextResponse.json({ ok: true, integrity });
   }
 
   return err("Unknown action");
