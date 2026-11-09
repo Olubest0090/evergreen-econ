@@ -14,6 +14,7 @@ type Mem = {
 type HistRow = {
   id: string;
   actor_discord_id: string | null;
+  actor_name?: string | null;
   action: string;
   details: {
     from?: string;
@@ -262,6 +263,15 @@ export default function SendClient() {
                     <span className="text-[var(--muted)]">
                       {new Date(h.created_at).toLocaleString()}
                     </span>
+                  </div>
+                  <div className="text-[var(--text)]">
+                    By:{" "}
+                    <span className="font-medium">
+                      {h.actor_name || h.actor_discord_id || "Unknown"}
+                    </span>
+                    {h.actor_discord_id && h.actor_name && h.actor_name !== h.actor_discord_id ? (
+                      <span className="text-[var(--muted)]"> · Discord {h.actor_discord_id}</span>
+                    ) : null}
                   </div>
                   <div>
                     {(d.from === "source" ? "Main" : "Offshore")} →{" "}

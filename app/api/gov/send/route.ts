@@ -44,10 +44,42 @@ export async function GET() {
       .order("created_at", { ascending: false })
       .limit(50),
   ]);
+
+  const rows = history ?? [];
+  const actorIds = Array.from(
+    new Set(rows.map((h) => String(h.actor_discord_id || "")).filter(Boolean))
+  );
+
+  // Resolve Discord IDs → leader / username (any status — staff may be inactive later)
+  const nameByDiscord = new Map<string, string>();
+  if (actorIds.length) {
+    const { data: people } = await supa
+      .from("econ_members")
+      .select("discord_id, leader_name, discord_username")
+      .in("discord_id", actorIds);
+    for (const p of people ?? []) {
+      const id = String(p.discord_id);
+      const label =
+        (p.leader_name && String(p.leader_name).trim()) ||
+        (p.discord_username && String(p.discord_username).trim()) ||
+        id;
+      nameByDiscord.set(id, label);
+    }
+  }
+
+  const historyWithWho = rows.map((h) => {
+    const did = h.actor_discord_id ? String(h.actor_discord_id) : "";
+    return {
+      ...h,
+      actor_name: did ? nameByDiscord.get(did) || did : "Unknown",
+      actor_discord_id: did || null,
+    };
+  });
+
   return NextResponse.json({
     members: members ?? [],
     resources: RESOURCES,
-    history: history ?? [],
+    history: historyWithWho,
   });
 }
 
@@ -191,6 +223,7 @@ export async function POST(req: Request) {
       memberNation: debitMember?.nation_id ?? null,
       bankRecord: result.id,
       depositDebited: !!debitMember,
+      actorName: staff.leaderName || staff.username || staff.discordId,
     },
   });
 
