@@ -36,7 +36,7 @@ type Overview = {
   marketPriceDate: string | null;
 };
 type AuditRow = { nationId: number; nation: string; leader: string; cities: number; registered: boolean; known: boolean; missing: Record<string, number> };
-type Audit = { targetActive: boolean; holdingsKnown: boolean; total: number; under: AuditRow[]; unknown: number; notRegistered: string[] };
+type Audit = { targetActive: boolean; holdingsKnown: boolean; total: number; under: AuditRow[]; unknown: number; notRegistered: string[]; compareAgainst?: string };
 type StaffRow = { discordId: string; leader: string; nationId: number; role: "default" | "staff" | "head"; perms: string[] | null };
 type MeInfo = { perms: string[] | null; isHead: boolean; canManageRoles: boolean };
 

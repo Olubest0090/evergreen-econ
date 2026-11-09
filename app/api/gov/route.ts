@@ -428,14 +428,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
   const action = String(body.action || "");
+  const supa = db();
+  const bad = (m: string, s = 400) => NextResponse.json({ error: m }, { status: s });
 
   const locked = await rejectIfLocked(action);
   if (locked) {
     void logSecurityEvent({ kind: "lockdown_block", discordId: staff.discordId, path: "/api/gov", detail: { action } });
     return bad(locked);
   }
-  const supa = db();
-  const bad = (m: string, s = 400) => NextResponse.json({ error: m }, { status: s });
 
 
 
