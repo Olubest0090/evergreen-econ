@@ -133,17 +133,28 @@ export async function GET(req: Request) {
   if (a === "members") {
     if (!staff.can("members")) return noPerm();
     const q = (new URL(req.url).searchParams.get("q") || "").trim().slice(0, 40);
+    // Strip chars that break PostgREST .or() filters
+    const safe = q.replace(/[%(),]/g, " ").replace(/\s+/g, " ").trim();
     let query = supa
       .from("econ_members")
       .select("id, discord_username, nation_id, nation_name, leader_name, status, last_login")
       .order("leader_name", { ascending: true })
-      .limit(100);
-    if (q) {
-      const safe = q.replace(/[\\%_,()]/g, "\\$&");
-      query = /^\d+$/.test(q) ? query.eq("nation_id", Number(q)) : query.or(`leader_name.ilike.%${safe}%,nation_name.ilike.%${safe}%,discord_username.ilike.%${safe}%`);
+      .limit(safe ? 200 : 100);
+    if (safe) {
+      if (/^\d+$/.test(safe)) {
+        query = query.eq("nation_id", Number(safe));
+      } else {
+        // ilike on leader, nation name, discord; also match nation id substring via cast not available — name fields only
+        query = query.or(
+          `leader_name.ilike.%${safe}%,nation_name.ilike.%${safe}%,discord_username.ilike.%${safe}%`
+        );
+      }
     }
     const { data: members, error } = await query;
-    if (error) return NextResponse.json({ error: "Could not load members" }, { status: 500 });
+    if (error) {
+      console.error("members search:", error.message);
+      return NextResponse.json({ error: "Could not load members: " + error.message }, { status: 500 });
+    }
     const ids = (members ?? []).map((m) => m.id);
     const { data: bal } = ids.length
       ? await supa.from("econ_balances").select("member_id, resource, balance").in("member_id", ids)
@@ -237,56 +248,127 @@ export async function GET(req: Request) {
     const { data: cfg } = await supa.from("econ_settings").select("value").eq("key", "alliance").maybeSingle();
     const allianceId = Number((cfg?.value as { alliance_id?: number } | null)?.alliance_id);
     if (!allianceId) return NextResponse.json({ error: "The alliance isn't set up yet" }, { status: 400 });
-    let nations;
+
+    // Cities from P&W (for per-city target). Holdings in-game are NOT used for shortfall.
+    let nations: Awaited<ReturnType<typeof fetchAllianceHoldings>> = [];
     try {
       nations = await fetchAllianceHoldings(allianceId);
     } catch (e) {
       console.error("audit lookup failed:", e);
       return NextResponse.json({ error: "Could not reach Politics & War right now" }, { status: 502 });
     }
-    const [{ data: rule }, { data: overrides }, { data: members }] = await Promise.all([
-      supa.from("econ_warchest_rules").select("base, per_city, active").eq("name", "Default").maybeSingle(),
-      supa.from("econ_warchest_overrides").select("nation_id, targets"),
-      supa.from("econ_members").select("nation_id").limit(3000),
-    ]);
-    const registered = new Set((members ?? []).map((m) => Number(m.nation_id)));
-    const over = new Map<number, Record<string, number>>(
-      (overrides ?? []).map((o): [number, Record<string, number>] => [Number(o.nation_id), o.targets as Record<string, number>])
-    );
-    const base = (rule?.base ?? {}) as Record<string, number>;
-    const perCity = (rule?.per_city ?? {}) as Record<string, number>;
-
-    const rows: { nationId: number; nation: string; leader: string; cities: number; registered: boolean; known: boolean; missing: Record<string, number> }[] = [];
-    const notRegistered: string[] = [];
-    let known = 0;
+    const citiesByNation = new Map<number, number>();
+    const nameByNation = new Map<number, { nation: string; leader: string }>();
     for (const n of nations) {
       if ((n.alliance_position || "").toUpperCase() === "APPLICANT") continue;
       const id = Number(n.id);
-      if (!registered.has(id)) notRegistered.push(`${n.leader_name} (#${id})`);
-      const target: Record<string, number> = over.get(id) ?? {};
-      if (!over.has(id) && rule?.active) {
-        for (const k of Object.keys({ ...base, ...perCity })) {
-          const v = Number(base[k] ?? 0) + Number(perCity[k] ?? 0) * Number(n.num_cities ?? 0);
-          if (v > 0) target[k] = v;
-        }
-      }
-      const missing: Record<string, number> = {};
-      if (n.resources) {
-        known++;
-        for (const [k, t] of Object.entries(target)) {
-          const short = Math.round((Number(t) - (n.resources[k] ?? 0)) * 100) / 100;
-          if (short > 0) missing[k] = short;
-        }
-      }
-      rows.push({ nationId: id, nation: n.nation_name, leader: n.leader_name, cities: Number(n.num_cities ?? 0), registered: registered.has(id), known: !!n.resources, missing });
+      citiesByNation.set(id, Number(n.num_cities ?? 0));
+      nameByNation.set(id, {
+        nation: String(n.nation_name || ""),
+        leader: String(n.leader_name || ""),
+      });
     }
-    rows.sort((a, b) => (b.missing.money ?? 0) - (a.missing.money ?? 0) || Object.keys(b.missing).length - Object.keys(a.missing).length);
+
+    const [{ data: rule }, { data: overrides }, { data: members }, { data: bals }] = await Promise.all([
+      supa.from("econ_warchest_rules").select("base, per_city, active").eq("name", "Default").maybeSingle(),
+      supa.from("econ_warchest_overrides").select("nation_id, targets"),
+      supa
+        .from("econ_members")
+        .select("id, nation_id, leader_name, nation_name, status")
+        .eq("status", "active")
+        .limit(3000),
+      supa.from("econ_balances").select("member_id, resource, balance"),
+    ]);
+
+    const over = new Map<number, Record<string, number>>(
+      (overrides ?? []).map((o): [number, Record<string, number>] => [
+        Number(o.nation_id),
+        o.targets as Record<string, number>,
+      ])
+    );
+    const base = (rule?.base ?? {}) as Record<string, number>;
+    const perCity = (rule?.per_city ?? {}) as Record<string, number>;
+    const ruleOn = !!rule?.active;
+
+    // member_id → resource → deposit balance
+    const depByMember = new Map<string, Record<string, number>>();
+    for (const b of bals ?? []) {
+      const mid = String(b.member_id);
+      const bag = depByMember.get(mid) || {};
+      bag[String(b.resource)] = Number(b.balance) || 0;
+      depByMember.set(mid, bag);
+    }
+
+    const rows: {
+      nationId: number;
+      nation: string;
+      leader: string;
+      cities: number;
+      registered: boolean;
+      known: boolean;
+      missing: Record<string, number>;
+      target: Record<string, number>;
+      deposit: Record<string, number>;
+    }[] = [];
+    const notRegistered: string[] = [];
+    const aaNationIds = new Set(citiesByNation.keys());
+
+    for (const n of nations) {
+      if ((n.alliance_position || "").toUpperCase() === "APPLICANT") continue;
+      const id = Number(n.id);
+      // filled below only for registered; track AA not on site
+      if (![...(members ?? [])].some((m) => Number(m.nation_id) === id)) {
+        notRegistered.push(`${n.leader_name} (#${id})`);
+      }
+    }
+
+    for (const m of members ?? []) {
+      const id = Number(m.nation_id);
+      if (!aaNationIds.has(id) && citiesByNation.size > 0) {
+        // member on site but not in AA roster right now — still audit their deposit
+      }
+      const cities = citiesByNation.get(id) ?? 0;
+      const names = nameByNation.get(id);
+      const target: Record<string, number> = { ...(over.get(id) || {}) };
+      if (!over.has(id) && ruleOn) {
+        for (const k of Object.keys({ ...base, ...perCity })) {
+          const v = Number(base[k] ?? 0) + Number(perCity[k] ?? 0) * cities;
+          if (v > 0) target[k] = Math.round(v * 100) / 100;
+        }
+      }
+      const deposit = depByMember.get(String(m.id)) || {};
+      const missing: Record<string, number> = {};
+      for (const [k, t] of Object.entries(target)) {
+        const have = Number(deposit[k] ?? 0);
+        const short = Math.round((Number(t) - have) * 100) / 100;
+        if (short > 0.0001) missing[k] = short;
+      }
+      rows.push({
+        nationId: id,
+        nation: names?.nation || String(m.nation_name || ""),
+        leader: names?.leader || String(m.leader_name || ""),
+        cities,
+        registered: true,
+        known: true, // site deposit always "known"
+        missing,
+        target,
+        deposit,
+      });
+    }
+
+    rows.sort(
+      (a, b) =>
+        (b.missing.money ?? 0) - (a.missing.money ?? 0) ||
+        Object.keys(b.missing).length - Object.keys(a.missing).length
+    );
+
     return NextResponse.json({
-      targetActive: !!rule?.active || over.size > 0,
-      holdingsKnown: known > 0,
+      targetActive: ruleOn || over.size > 0,
+      holdingsKnown: true, // we use site deposits
+      compareAgainst: "site_deposit",
       total: rows.length,
       under: rows.filter((r) => Object.keys(r.missing).length > 0).slice(0, 300),
-      unknown: rows.filter((r) => !r.known).length,
+      unknown: 0,
       notRegistered: notRegistered.slice(0, 200),
     });
   }

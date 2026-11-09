@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RESOURCES, LABEL, describe, fmt } from "@/lib/resources";
 import OffshorePanel from "./OffshorePanel";
 import GrantsPanel from "./GrantsPanel";
@@ -69,6 +69,8 @@ export default function GovClient({ owner }: { owner: boolean }) {
   const [adjustNote, setAdjustNote] = useState("");
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [q, setQ] = useState("");
+  const qRef = useRef(q);
+  qRef.current = q;
   const [taxes, setTaxes] = useState<Tax[] | null>(null);
   const [log, setLog] = useState<LogRow[] | null>(null);
   const [base, setBase] = useState<Record<string, string>>({});
@@ -149,7 +151,7 @@ export default function GovClient({ owner }: { owner: boolean }) {
       if (tab === "requests") setReqs((await api(`/api/gov?a=requests&status=${sub}`)).requests);
       if (tab === "withdrawals") setWds((await api(`/api/gov?a=withdrawals&status=${sub}`)).withdrawals);
       if (tab === "members") {
-        const r = await api(`/api/gov?a=members&q=${encodeURIComponent(q)}`);
+        const r = await api(`/api/gov?a=members&q=${encodeURIComponent(qRef.current)}`);
         setMembers(r.members);
         setBalances(r.balances);
       }
@@ -319,7 +321,7 @@ export default function GovClient({ owner }: { owner: boolean }) {
               <div className="card space-y-1 text-xs">
                 <p>{audit.total} nations checked.</p>
                 {!audit.targetActive && <p className="text-[var(--gold)]">No warchest list is set yet. Add one in the Warchest tab to see who is short.</p>}
-                {audit.targetActive && !audit.holdingsKnown && <p className="text-[var(--gold)]">Politics &amp; War isn&apos;t showing members&apos; holdings to this API key, so shortfalls can&apos;t be worked out.</p>}
+                {audit.compareAgainst === "site_deposit" && <p className="text-[var(--muted)]">Shortfalls are vs <strong>site deposits</strong> (warchest target − deposit balance), not in-game stockpile.</p>}
                 {audit.holdingsKnown && audit.unknown > 0 && <p className="text-[var(--muted)]">{audit.unknown} nations have hidden holdings.</p>}
               </div>
               {audit.under.length > 0 && <h2 className="text-sm font-semibold text-[var(--muted)]">Below warchest target ({audit.under.length})</h2>}
