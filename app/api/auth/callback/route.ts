@@ -5,6 +5,13 @@ import { exchangeCode, fetchGuildMember, fetchUser, normName } from "@/lib/disco
 import { fetchAllianceNations } from "@/lib/pnw";
 import { syncBankrecs } from "@/lib/bankrecs";
 import { claimLocutusPendingForNation } from "@/lib/locutusPending";
+import {
+  clientIp,
+  isLoginRateLimited,
+  logSecurityEvent,
+  recordLoginAttempt,
+  getSessionEpoch,
+} from "@/lib/securityCore";
 
 type Alliance = { alliance_id: number | null; guild_id: string | null };
 type Roles = { guild_id: string | null; role_ids: string[] };
@@ -12,14 +19,29 @@ type Roles = { guild_id: string | null; role_ids: string[] };
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const origin = process.env.SITE_URL || url.origin;
-  const fail = (code: string) => {
+  const fail = (code: string, discordId?: string) => {
+    void recordLoginAttempt({ ip: clientIp(req), discordId, success: false, reason: code });
+    void logSecurityEvent({
+      kind: "login_fail",
+      ip: clientIp(req),
+      discordId: discordId || null,
+      path: "/api/auth/callback",
+      detail: { code },
+    });
     const response = NextResponse.redirect(new URL(`/login?error=${code}`, origin));
     response.cookies.delete("econ_oauth");
     return response;
   };
 
   try {
-    const code = url.searchParams.get("code");
+    
+  const ip = clientIp(req);
+  if (await isLoginRateLimited(ip)) {
+    await recordLoginAttempt({ ip, success: false, reason: "rate_limited" });
+    return fail("rate");
+  }
+
+  const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
     const cookieState = req.headers
       .get("cookie")
@@ -130,7 +152,10 @@ export async function GET(req: Request) {
       }
     }
 
-    await setSession(user.id, staff);
+    const __epoch = await getSessionEpoch(user.id);
+    await setSession(user.id, staff, __epoch);
+    await recordLoginAttempt({ ip, discordId: user.id, success: true, reason: "ok" });
+    void logSecurityEvent({ kind: "login_ok", ip, discordId: user.id, path: "/api/auth/callback" });
 
     void syncBankrecs({ force: true }).catch((error) => {
       console.error("post-login bankrec sync:", error);

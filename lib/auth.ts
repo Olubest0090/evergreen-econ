@@ -1,5 +1,6 @@
 import { readSession } from "@/lib/session";
 import { db } from "@/lib/supabase";
+import { getSessionEpoch } from "@/lib/securityCore";
 
 export const PERMS = ["requests", "withdrawals", "balances", "import", "rules", "members", "roles"] as const;
 export type Perm = (typeof PERMS)[number];
@@ -26,6 +27,9 @@ export type Staff = Me & {
 export async function getMe(): Promise<Me | null> {
   const s = await readSession();
   if (!s) return null;
+  // Phase 1: reject revoked sessions (epoch bumped on logout-all / force revoke)
+  const liveEpoch = await getSessionEpoch(s.discordId);
+  if (s.epoch < liveEpoch) return null;
   const { data } = await db()
     .from("econ_members")
     .select("id, discord_id, discord_username, nation_id, nation_name, leader_name, status")

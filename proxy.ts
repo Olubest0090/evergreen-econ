@@ -3,14 +3,34 @@ import { createClient } from "@supabase/supabase-js";
 
 const STATIC_FILE = /\.(?:avif|css|gif|ico|jpe?g|js|map|png|svg|txt|webp|woff2?)$/i;
 
+function withSecurityHeaders(res: NextResponse) {
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  res.headers.set("X-Frame-Options", "DENY");
+  res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.headers.set("X-DNS-Prefetch-Control", "off");
+  // CSP kept moderate so Next.js + Discord OAuth still work
+  if (!res.headers.has("Content-Security-Policy")) {
+    res.headers.set(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.politicsandwar.com https://*.supabase.co https://discord.com; frame-ancestors 'none'"
+    );
+  }
+  return res;
+}
+
 export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
-  if (path.startsWith("/_next/") || path === "/favicon.ico" ||
-      path === "/robots.txt" || path === "/sitemap.xml" || STATIC_FILE.test(path)) {
-    return NextResponse.next();
+  if (
+    path.startsWith("/_next/") ||
+    path === "/favicon.ico" ||
+    path === "/robots.txt" ||
+    path === "/sitemap.xml" ||
+    STATIC_FILE.test(path)
+  ) {
+    return withSecurityHeaders(NextResponse.next());
   }
 
-  // Logging failure must never take the application offline.
   try {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_KEY;
@@ -18,10 +38,11 @@ export async function proxy(request: NextRequest) {
       const supabase = createClient(url, key, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
-      const ip = request.headers.get("x-real-ip") ??
-        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+      const ip =
+        request.headers.get("x-real-ip") ??
+        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+        null;
 
-      // Never store query strings, request bodies, cookies or authorization headers.
       await supabase.from("econ_security_logs").insert({
         ip_address: ip,
         method: request.method.slice(0, 12),
@@ -33,7 +54,7 @@ export async function proxy(request: NextRequest) {
     console.error("Security request logging failed:", error);
   }
 
-  return NextResponse.next();
+  return withSecurityHeaders(NextResponse.next());
 }
 
 export const config = {

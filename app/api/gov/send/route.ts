@@ -3,6 +3,7 @@ import { requireStaff } from "@/lib/auth";
 import { db } from "@/lib/supabase";
 import { bankWithdraw, type BankAmounts, type Actor } from "@/lib/pnwBank";
 import { RESOURCES, isResource } from "@/lib/resources";
+import { lockdownBlocks, logSecurityEvent } from "@/lib/securityCore";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -94,6 +95,13 @@ export async function POST(req: Request) {
   if (!staff.isHead && !staff.can("withdrawals") && staff.perms !== null) {
     return err("You don't have permission to send funds.", 403);
   }
+
+  const locked = await lockdownBlocks("gov_send");
+  if (locked) {
+    void logSecurityEvent({ kind: "lockdown_block", discordId: staff.discordId, path: "/api/gov/send" });
+    return err(locked, 423);
+  }
+
 
   let body: Record<string, unknown>;
   try {

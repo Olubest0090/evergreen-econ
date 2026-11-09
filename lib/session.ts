@@ -10,12 +10,22 @@ function secret(): string {
   return s;
 }
 
-const sig = (payload: string) => crypto.createHmac("sha256", secret()).update(payload).digest("hex");
+const sig = (payload: string) =>
+  crypto.createHmac("sha256", secret()).update(payload).digest("hex");
 
-// Token: <discordId>.<staff 0|1>.<expiry>.<hmac>
-export async function setSession(discordId: string, staff: boolean) {
+/**
+ * Token formats:
+ * - v2: discordId.staff.exp.epoch.hmac
+ * - v1 legacy: discordId.staff.exp.hmac (epoch treated as 0)
+ */
+export async function setSession(
+  discordId: string,
+  staff: boolean,
+  sessionEpoch = 0
+) {
   const exp = Math.floor(Date.now() / 1000) + MAX_AGE;
-  const payload = `${discordId}.${staff ? 1 : 0}.${exp}`;
+  const epoch = Math.max(0, Math.floor(Number(sessionEpoch) || 0));
+  const payload = `${discordId}.${staff ? 1 : 0}.${exp}.${epoch}`;
   const jar = await cookies();
   jar.set(COOKIE, `${payload}.${sig(payload)}`, {
     httpOnly: true,
@@ -30,16 +40,38 @@ export async function clearSession() {
   (await cookies()).delete(COOKIE);
 }
 
-export async function readSession(): Promise<{ discordId: string; staff: boolean } | null> {
+export async function readSession(): Promise<{
+  discordId: string;
+  staff: boolean;
+  epoch: number;
+} | null> {
   const raw = (await cookies()).get(COOKIE)?.value;
   if (!raw) return null;
   const parts = raw.split(".");
-  if (parts.length !== 4) return null;
-  const [discordId, staff, expStr, given] = parts;
-  const a = Buffer.from(given);
-  const b = Buffer.from(sig(`${discordId}.${staff}.${expStr}`));
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  if (!/^\d+$/.test(discordId)) return null;
-  if (Number(expStr) < Math.floor(Date.now() / 1000)) return null;
-  return { discordId, staff: staff === "1" };
+
+  // v2: 5 parts
+  if (parts.length === 5) {
+    const [discordId, staff, expStr, epochStr, given] = parts;
+    const payload = `${discordId}.${staff}.${expStr}.${epochStr}`;
+    const a = Buffer.from(given);
+    const b = Buffer.from(sig(payload));
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    if (!/^\d+$/.test(discordId)) return null;
+    if (Number(expStr) < Math.floor(Date.now() / 1000)) return null;
+    return { discordId, staff: staff === "1", epoch: Number(epochStr) || 0 };
+  }
+
+  // v1 legacy: 4 parts
+  if (parts.length === 4) {
+    const [discordId, staff, expStr, given] = parts;
+    const payload = `${discordId}.${staff}.${expStr}`;
+    const a = Buffer.from(given);
+    const b = Buffer.from(sig(payload));
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    if (!/^\d+$/.test(discordId)) return null;
+    if (Number(expStr) < Math.floor(Date.now() / 1000)) return null;
+    return { discordId, staff: staff === "1", epoch: 0 };
+  }
+
+  return null;
 }

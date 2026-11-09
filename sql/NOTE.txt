@@ -1,0 +1,3 @@
+No SQL required for this recovery.
+It writes deposit rows to econ_ledger with note 'Locutus recovery after 2026-11-03T19:40:00.000Z'
+and skips rows that already have that note.

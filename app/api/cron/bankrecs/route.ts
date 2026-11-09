@@ -1,16 +1,19 @@
 import { NextResponse } from "next/server";
 import { syncBankrecs } from "@/lib/bankrecs";
+import { cronAuthorized, cronUnauthorized } from "@/lib/cronAuth";
+import { clientIp, logSecurityEvent } from "@/lib/securityCore";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.get("authorization") !== `Bearer ${secret}`) {
-    const url = new URL(req.url);
-    if (url.searchParams.get("secret") !== secret) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  if (!cronAuthorized(req)) {
+    void logSecurityEvent({
+      kind: "cron_denied",
+      ip: clientIp(req),
+      path: "/api/cron/bankrecs",
+    });
+    return cronUnauthorized();
   }
   try {
     const result = await syncBankrecs({ force: true });

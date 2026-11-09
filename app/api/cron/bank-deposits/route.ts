@@ -1,24 +1,20 @@
 import { NextResponse } from "next/server";
 import { syncBankrecs } from "@/lib/bankrecs";
 import { maybeRunAutoOffshore } from "@/lib/autoOffshore";
+import { cronAuthorized, cronUnauthorized } from "@/lib/cronAuth";
+import { clientIp, logSecurityEvent } from "@/lib/securityCore";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-function authorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) return true;
-  const url = new URL(req.url);
-  return (
-    req.headers.get("authorization") === `Bearer ${secret}` ||
-    url.searchParams.get("secret") === secret ||
-    req.headers.get("x-cron-secret") === secret
-  );
-}
-
 export async function GET(req: Request) {
-  if (!authorized(req)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!cronAuthorized(req)) {
+    void logSecurityEvent({
+      kind: "cron_denied",
+      ip: clientIp(req),
+      path: "/api/cron/bank-deposits",
+    });
+    return cronUnauthorized();
   }
 
   try {

@@ -1,0 +1,16 @@
+Set deposit channel (pick ONE):
+
+A) Vercel → Environment Variables:
+   DISCORD_DEPOSIT_CHANNEL_ID=1467951365669130453
+   (your deposit channel id)
+   Redeploy after saving.
+
+B) Supabase → Table econ_settings:
+   key = discord_channels
+   value (json) = {
+     "deposit_channel_id": "1467951365669130453",
+     "grant_channel_id": "1566513509276196895",
+     "econ_role_id": "1467794811162460285"
+   }
+
+Bot must be able to View Channel + Send Messages in that channel.
