@@ -55,6 +55,13 @@ type Payload = {
   recentFails: FailRow[];
   recentLogs: LogRow[];
   adminActions: AdminRow[];
+  ipRules?: {
+    id: number;
+    ip_address: string;
+    status: string;
+    reason: string | null;
+    created_at: string;
+  }[];
   financial?: {
     thresholds: {
       large_withdrawal_money: number;
@@ -86,6 +93,7 @@ type Tab =
   | "access"
   | "admin"
   | "financial"
+  | "ips"
   | "lockdown";
 
 const TABS: [Tab, string][] = [
@@ -95,6 +103,7 @@ const TABS: [Tab, string][] = [
   ["access", "Access logs"],
   ["admin", "Admin trail"],
   ["financial", "Financial"],
+  ["ips", "IP rules"],
   ["lockdown", "Emergency"],
 ];
 
@@ -213,7 +222,7 @@ export default function SecurityClient() {
           </p>
           <h1 className="text-xl font-bold">Security Center</h1>
           <p className="text-xs text-[var(--muted)]">
-            Phase 2 monitoring — access, logins, events, emergency controls.
+            Phases 1–4 — monitoring, financial integrity, IP controls, recovery.
           </p>
         </div>
         <button type="button" className="btn-ghost" disabled={busy} onClick={() => void load()}>
@@ -444,6 +453,32 @@ export default function SecurityClient() {
             >
               Run integrity scan now
             </button>
+            <button
+              type="button"
+              className="btn-ghost mt-2 !text-[var(--danger)]"
+              disabled={busy}
+              onClick={async () => {
+                if (!window.confirm("Credit every negative balance up to zero? This writes security_recovery ledger rows.")) return;
+                setBusy(true);
+                try {
+                  const r = await fetch("/api/owner/security", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "zero_negatives", confirm: true }),
+                  });
+                  const j = await r.json();
+                  if (!r.ok) throw new Error(j.error || "Failed");
+                  setMsg(`Zeroed ${j.fixed ?? 0} negative row(s)`);
+                  await load();
+                } catch (e) {
+                  setMsg(e instanceof Error ? e.message : "Failed");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Zero all negative balances
+            </button>
           </div>
           {data.financial.integrity.negativeBalances.length > 0 && (
             <div className="card space-y-1 text-xs">
@@ -483,6 +518,112 @@ export default function SecurityClient() {
         </div>
       )}
 
+
+      {tab === "ips" && (
+        <div className="space-y-3">
+          <div className="card space-y-2">
+            <h2 className="font-semibold">Block or trust an IP</h2>
+            <p className="text-[11px] text-[var(--muted)]">
+              Blocked IPs get HTTP 403 on all pages. Trusted is recorded for review only (does not skip login).
+            </p>
+            <IpRuleForm
+              busy={busy}
+              onDone={async (msg) => {
+                setMsg(msg);
+                await load();
+              }}
+              setBusy={setBusy}
+            />
+          </div>
+          <div className="card space-y-2">
+            <h2 className="font-semibold">Current rules</h2>
+            {!data.ipRules?.length ? (
+              <p className="text-xs text-[var(--muted)]">No IP rules yet.</p>
+            ) : (
+              <ul className="max-h-[24rem] space-y-2 overflow-y-auto text-[11px]">
+                {data.ipRules.map((r) => (
+                  <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-black/20 px-2 py-1.5">
+                    <div>
+                      <span className={r.status === "blocked" ? "text-[var(--danger)] font-semibold" : "text-[var(--accent)] font-semibold"}>
+                        {r.status}
+                      </span>{" "}
+                      <span className="font-mono">{r.ip_address}</span>
+                      {r.reason ? <span className="text-[var(--muted)]"> · {r.reason}</span> : null}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-ghost !py-1"
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        try {
+                          const res = await fetch("/api/owner/security", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "ip_remove", ip: r.ip_address }),
+                          });
+                          const j = await res.json();
+                          if (!res.ok) throw new Error(j.error || "Failed");
+                          setMsg("IP rule removed");
+                          await load();
+                        } catch (e) {
+                          setMsg(e instanceof Error ? e.message : "Failed");
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          {data.suspiciousIps.length > 0 && (
+            <div className="card space-y-2">
+              <h2 className="font-semibold">Quick-block from failed logins (24h)</h2>
+              <ul className="space-y-1 text-xs">
+                {data.suspiciousIps.map((x) => (
+                  <li key={x.ip} className="flex items-center justify-between gap-2">
+                    <span className="font-mono">{x.ip} · {x.fails} fails</span>
+                    <button
+                      type="button"
+                      className="btn-ghost !py-1 text-[var(--danger)]"
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        try {
+                          const res = await fetch("/api/owner/security", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              action: "ip_block",
+                              ip: x.ip,
+                              reason: `Auto from ${x.fails} failed logins`,
+                            }),
+                          });
+                          const j = await res.json();
+                          if (!res.ok) throw new Error(j.error || "Failed");
+                          setMsg(`Blocked ${x.ip}`);
+                          await load();
+                        } catch (e) {
+                          setMsg(e instanceof Error ? e.message : "Failed");
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Block
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
       {tab === "lockdown" && (
         <div className="card space-y-3">
           <h2 className="font-semibold">Emergency lockdown</h2>
@@ -515,8 +656,80 @@ export default function SecurityClient() {
           ← Gov
         </a>
         {" · "}
-        Phase 2 monitoring · Phase 3 financial integrity next
+        Security phases 1–4 complete
       </p>
     </main>
   );
 }
+
+function IpRuleForm({
+  busy,
+  setBusy,
+  onDone,
+}: {
+  busy: boolean;
+  setBusy: (b: boolean) => void;
+  onDone: (msg: string) => Promise<void>;
+}) {
+  const [ip, setIp] = useState("");
+  const [reason, setReason] = useState("");
+  return (
+    <div className="space-y-2">
+      <input className="input" placeholder="IP address" value={ip} onChange={(e) => setIp(e.target.value)} />
+      <input className="input" placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="btn-ghost !text-[var(--danger)]"
+          disabled={busy || !ip.trim()}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const res = await fetch("/api/owner/security", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "ip_block", ip, reason }),
+              });
+              const j = await res.json();
+              if (!res.ok) throw new Error(j.error || "Failed");
+              setIp("");
+              await onDone(`Blocked ${ip}`);
+            } catch (e) {
+              await onDone(e instanceof Error ? e.message : "Failed");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Block IP
+        </button>
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy || !ip.trim()}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const res = await fetch("/api/owner/security", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "ip_trust", ip, reason }),
+              });
+              const j = await res.json();
+              if (!res.ok) throw new Error(j.error || "Failed");
+              setIp("");
+              await onDone(`Trusted ${ip}`);
+            } catch (e) {
+              await onDone(e instanceof Error ? e.message : "Failed");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Trust IP
+        </button>
+      </div>
+    </div>
+  );
+}
+

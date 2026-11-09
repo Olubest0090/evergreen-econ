@@ -4,6 +4,7 @@ import { db } from "@/lib/supabase";
 import {
   getLockdown,
   logSecurityEvent,
+  bumpSessionEpoch,
   type LockdownFlags,
 } from "@/lib/securityCore";
 import {
@@ -11,6 +12,13 @@ import {
   listFinancialAlerts,
   runIntegrityScan,
 } from "@/lib/financialSecurity";
+import {
+  listIpRules,
+  upsertIpRule,
+  removeIpRule,
+  zeroNegativeBalances,
+} from "@/lib/ipRules";
+import { readSession } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +39,7 @@ export async function GET() {
     thresholds,
     integrity,
     financialAlerts,
+    ipRules,
     { count: reqToday },
     { count: failLoginsToday },
     { count: okLoginsToday },
@@ -46,6 +55,7 @@ export async function GET() {
     getFinancialThresholds(),
     runIntegrityScan(),
     listFinancialAlerts(40),
+    listIpRules(),
     supa.from("econ_security_logs").select("id", { count: "exact", head: true }).gte("created_at", since),
     supa.from("econ_login_attempts").select("id", { count: "exact", head: true }).eq("success", false).gte("created_at", since),
     supa.from("econ_login_attempts").select("id", { count: "exact", head: true }).eq("success", true).gte("created_at", since),
@@ -93,6 +103,11 @@ export async function GET() {
       level: "critical",
       text: `${integrity.negativeBalances.length} negative balance row(s) detected.`,
     });
+  if (ipRules.filter((r) => r.status === "blocked").length)
+    alerts.push({
+      level: "info",
+      text: `${ipRules.filter((r) => r.status === "blocked").length} IP(s) currently blocked.`,
+    });
   if ((failLoginsToday ?? 0) >= 20)
     alerts.push({ level: "warning", text: `${failLoginsToday} failed logins today (UTC).` });
   if ((cronDeniedWeek ?? 0) > 0)
@@ -128,11 +143,13 @@ export async function GET() {
       integrity,
       alerts: financialAlerts,
     },
+    ipRules,
   });
 }
 
 export async function POST(req: Request) {
   if (!(await isOwnerSession())) return err("Forbidden", 403);
+  const session = await readSession();
 
   let body: Record<string, unknown>;
   try {
@@ -189,5 +206,53 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, integrity });
   }
 
+  if (action === "ip_block" || action === "ip_trust") {
+    const ip = String(body.ip || "").trim();
+    const reason = String(body.reason || "");
+    const r = await upsertIpRule({
+      ip,
+      status: action === "ip_block" ? "blocked" : "trusted",
+      reason,
+      createdBy: session?.discordId,
+    });
+    if (!r.ok) return err(r.error);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "ip_remove") {
+    const ip = String(body.ip || "").trim();
+    const r = await removeIpRule(ip);
+    if (!r.ok) return err(r.error);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === "zero_negatives") {
+    if (!session?.discordId) return err("No session", 401);
+    if (!windowConfirmSafe(body)) {
+      /* require confirm: true */
+    }
+    if (body.confirm !== true && body.confirm !== "true") {
+      return err("Pass confirm: true to zero all negative balances");
+    }
+    const result = await zeroNegativeBalances(session.discordId);
+    return NextResponse.json({ ok: true, ...result });
+  }
+
+  if (action === "revoke_sessions") {
+    const discordId = String(body.discordId || "").trim();
+    if (!/^\d+$/.test(discordId)) return err("discordId must be a snowflake");
+    await bumpSessionEpoch(discordId);
+    await logSecurityEvent({
+      kind: "admin_action",
+      discordId: session?.discordId,
+      detail: { action: "revoke_sessions", target: discordId },
+    });
+    return NextResponse.json({ ok: true });
+  }
+
   return err("Unknown action");
+}
+
+function windowConfirmSafe(_body: Record<string, unknown>) {
+  return true;
 }

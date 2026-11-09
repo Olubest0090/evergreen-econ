@@ -9,7 +9,6 @@ function withSecurityHeaders(res: NextResponse) {
   res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   res.headers.set("X-DNS-Prefetch-Control", "off");
-  // CSP kept moderate so Next.js + Discord OAuth still work
   if (!res.headers.has("Content-Security-Policy")) {
     res.headers.set(
       "Content-Security-Policy",
@@ -31,6 +30,11 @@ export async function proxy(request: NextRequest) {
     return withSecurityHeaders(NextResponse.next());
   }
 
+  const ip =
+    request.headers.get("x-real-ip") ??
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    null;
+
   try {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_KEY;
@@ -38,10 +42,26 @@ export async function proxy(request: NextRequest) {
       const supabase = createClient(url, key, {
         auth: { persistSession: false, autoRefreshToken: false },
       });
-      const ip =
-        request.headers.get("x-real-ip") ??
-        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-        null;
+
+      // Phase 4: block listed IPs (except owner-security path still needs owner login —
+      // blocked IPs cannot use the site at all)
+      if (ip) {
+        const { data: rule } = await supabase
+          .from("econ_ip_rules")
+          .select("status, expires_at")
+          .eq("ip_address", ip)
+          .eq("status", "blocked")
+          .maybeSingle();
+        if (rule) {
+          const expired =
+            rule.expires_at && new Date(rule.expires_at).getTime() < Date.now();
+          if (!expired) {
+            return withSecurityHeaders(
+              new NextResponse("Forbidden", { status: 403 })
+            );
+          }
+        }
+      }
 
       await supabase.from("econ_security_logs").insert({
         ip_address: ip,
@@ -51,7 +71,7 @@ export async function proxy(request: NextRequest) {
       });
     }
   } catch (error) {
-    console.error("Security request logging failed:", error);
+    console.error("Security proxy:", error);
   }
 
   return withSecurityHeaders(NextResponse.next());
