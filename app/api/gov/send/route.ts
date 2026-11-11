@@ -102,7 +102,6 @@ export async function POST(req: Request) {
     return err(locked, 423);
   }
 
-
   let body: Record<string, unknown>;
   try {
     body = await req.json();
@@ -184,13 +183,19 @@ export async function POST(req: Request) {
 
   // Debit site deposit only if a member was chosen
   if (debitMember) {
+    const bankrecId = typeof result.id === "number" ? result.id : Number(result.id) || null;
     const rows = Object.entries(amounts).map(([resource, amount]) => ({
       member_id: debitMember!.id,
       resource,
       amount: -Math.abs(Number(amount)),
       kind: "gov_send",
       note: `Gov send → ${receiverType} #${receiver} (${note}) bank#${result.id ?? "?"}`,
-      actor_discord_id: staff.discordId,
+      // econ_ledger's column is `created_by`, NOT `actor_discord_id` — that was
+      // the bug: PostgREST rejected the whole insert over the unknown column,
+      // so the in-game send went through but the member's deposit was never
+      // actually reduced.
+      created_by: staff.discordId,
+      bankrec_id: bankrecId,
     }));
     const { error: ledErr } = await supa.from("econ_ledger").insert(rows);
     if (ledErr) {
@@ -204,7 +209,9 @@ export async function POST(req: Request) {
           receiverType,
           amounts,
           memberId: debitMember.id,
+          memberNation: debitMember.nation_id,
           bankRecord: result.id,
+          depositDebited: false,
           ledgerError: ledErr.message,
         },
       });

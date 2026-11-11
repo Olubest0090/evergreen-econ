@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireStaff } from "@/lib/auth";
 import { computeNet } from "@/lib/books";
+import { marketWorth } from "@/lib/marketWorth";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,9 @@ export async function GET() {
   if (!staff) return err("Forbidden", 403);
 
   try {
-    return NextResponse.json(await computeNet());
+    const books = await computeNet();
+    const worth = await marketWorth(books.net); // null if prices unavailable
+    return NextResponse.json({ ...books, worth });
   } catch (error) {
     console.error(
       "Books failed:",

@@ -19,7 +19,7 @@ async function call(body: Record<string, unknown>) {
 }
 
 
-type Books = { net: Record<string, number> };
+type Books = { net: Record<string, number>; worth?: { total: number; label: string } | null };
 
 function BooksCard() {
   const [books, setBooks] = useState<Books | null>(null);
@@ -47,6 +47,19 @@ function BooksCard() {
         <div className="space-y-1 text-xs">
           <p className="text-sm font-semibold">
             Net: {Object.keys(books.net).length ? describe(books.net) : "nothing yet"}
+          </p>
+          {books.worth && (
+            <p className="text-sm font-semibold text-[var(--accent)]">
+              Estimated total value: {books.worth.label}
+            </p>
+          )}
+          {!books.worth && Object.keys(books.net).length > 0 && (
+            <p className="text-[11px] text-[var(--muted)]">
+              Could not price this against today&apos;s market (prices unavailable right now).
+            </p>
+          )}
+          <p className="text-[10px] text-[var(--muted)]">
+            Valued using P&amp;W&apos;s latest daily average market prices, not a live trade price.
           </p>
         </div>
       )}
