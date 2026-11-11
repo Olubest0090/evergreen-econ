@@ -16,12 +16,9 @@ export async function marketWorth(
     }
     if (!Number.isFinite(total) || total <= 0) return null;
     const rounded = Math.round(total);
-    const label =
-      rounded >= 1_000_000
-        ? `$${(rounded / 1_000_000).toFixed(2)}m`
-        : rounded >= 1_000
-          ? `$${(rounded / 1_000).toFixed(1)}k`
-          : `$${rounded.toLocaleString()}`;
+    // Full number with comma grouping — no "k"/"m" shorthand, which read as
+    // ambiguous (e.g. "$46915.56m" looked like it might just be $46,915.56).
+    const label = `$${rounded.toLocaleString()}`;
     return { total: rounded, label };
   } catch (e) {
     console.error("marketWorth:", e);
