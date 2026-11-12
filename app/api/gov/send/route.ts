@@ -188,7 +188,7 @@ export async function POST(req: Request) {
       member_id: debitMember!.id,
       resource,
       amount: -Math.abs(Number(amount)),
-      kind: "gov_send",
+      kind: "withdrawal",
       note: `Gov send → ${receiverType} #${receiver} (${note}) bank#${result.id ?? "?"}`,
       // econ_ledger's column is `created_by`, NOT `actor_discord_id` — that was
       // the bug: PostgREST rejected the whole insert over the unknown column,
