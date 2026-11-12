@@ -19,7 +19,7 @@ async function call(body: Record<string, unknown>) {
 }
 
 
-type Books = { net: Record<string, number>; worth?: { total: number; label: string } | null };
+type Books = { net: Record<string, number>; worth?: { total: number; label: string } | null; live?: boolean };
 
 function BooksCard() {
   const [books, setBooks] = useState<Books | null>(null);
@@ -28,25 +28,27 @@ function BooksCard() {
   const load = useCallback(async () => {
     const res = await fetch("/api/gov/books", { cache: "no-store" });
     const j = await res.json().catch(() => ({}));
-    if (res.ok) setBooks(j as Books);
-    else setMsg(j.error || "Could not load the net");
+    if (res.ok) { setBooks(j as Books); setMsg(""); }
+    else setMsg(j.error || "Could not load the offshore bank");
   }, []);
 
   useEffect(() => { void load(); }, [load]);
 
   return (
     <div className="card space-y-2">
-      <h3 className="font-semibold">Evergreen net at offshore</h3>
+      <h3 className="font-semibold">Offshore bank — live total</h3>
       <p className="text-[11px] text-[var(--muted)]">
-        This is not the offshore bank&apos;s balance, and it never includes anyone&apos;s personal stockpile.
+        Read directly from the offshore alliance&apos;s bank in P&amp;W right now. If the offshore is
+        shared with anyone else, their holdings are included too — this is the bank&apos;s real total,
+        not just Evergreen&apos;s share.
       </p>
 
-      {!books && <p className="text-xs text-[var(--muted)]">Loading…</p>}
+      {!books && !msg && <p className="text-xs text-[var(--muted)]">Loading…</p>}
 
       {books && (
         <div className="space-y-1 text-xs">
           <p className="text-sm font-semibold">
-            Net: {Object.keys(books.net).length ? describe(books.net) : "nothing yet"}
+            {Object.keys(books.net).length ? describe(books.net) : "The offshore bank is empty."}
           </p>
           {books.worth && (
             <p className="text-sm font-semibold text-[var(--accent)]">
@@ -84,10 +86,6 @@ function TrackingCard() {
   const [report, setReport] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-  const [autoOff, setAutoOff] = useState(false);
-  const [autoMin, setAutoMin] = useState("10");
-  const [autoMax, setAutoMax] = useState("25");
-  const [autoFire, setAutoFire] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/gov/bankrecs", { cache: "no-store" });
