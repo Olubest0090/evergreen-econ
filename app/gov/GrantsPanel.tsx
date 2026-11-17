@@ -1,6 +1,6 @@
-import GrantRepayPanel from "./GrantRepayPanel";
 "use client";
 
+import GrantRepayPanel from "./GrantRepayPanel";
 import GrowthGrantPanel from "./GrowthGrantPanel";
 
 import { useCallback, useEffect, useState } from "react";
