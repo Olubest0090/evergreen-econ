@@ -445,7 +445,7 @@ export async function migrateGrantsForRepay(): Promise<{ updated: number }> {
   const supa = db();
   const { data } = await supa
     .from("econ_grants")
-    .select("id, amounts, original_amounts")
+    .select("id, amounts, original_amounts, repaid_amounts")
     .eq("status", "active");
   let updated = 0;
   for (const g of data ?? []) {

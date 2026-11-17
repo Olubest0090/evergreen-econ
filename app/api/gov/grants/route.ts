@@ -52,11 +52,35 @@ export async function GET(req: Request) {
       );
     }
   }
-  
+
+  return NextResponse.json({ error: "Unknown" }, { status: 400 });
+}
+
+export async function POST(req: Request) {
+  const staff = await requireStaff();
+  if (!staff) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!staff.can("balances") && !staff.can("requests") && !staff.can("members")) {
+    return NextResponse.json({ error: "No permission" }, { status: 403 });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  const action = String(body.action || "");
+  const cityIds = Array.isArray(body.cityIds)
+    ? (body.cityIds as unknown[]).map(Number).filter((n) => Number.isFinite(n) && n > 0)
+    : undefined;
+
   if (action === "set_repay_tax") {
     const tax_id = Number(body.tax_id);
     if (!Number.isInteger(tax_id) || tax_id <= 0) {
-      return NextResponse.json({ error: "Enter the in-game tax ID for grant repayment (50/50)" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Enter the in-game tax ID for grant repayment (50/50)" },
+        { status: 400 }
+      );
     }
     await saveGrantRepaySettings({
       tax_id,
@@ -79,27 +103,6 @@ export async function GET(req: Request) {
     const settings = await getGrantRepaySettings();
     return NextResponse.json({ settings });
   }
-
-return NextResponse.json({ error: "Unknown" }, { status: 400 });
-}
-
-export async function POST(req: Request) {
-  const staff = await requireStaff();
-  if (!staff) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!staff.can("balances") && !staff.can("requests") && !staff.can("members")) {
-    return NextResponse.json({ error: "No permission" }, { status: 403 });
-  }
-
-  let body: Record<string, unknown>;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-  const action = String(body.action || "");
-  const cityIds = Array.isArray(body.cityIds)
-    ? (body.cityIds as unknown[]).map(Number).filter((n) => Number.isFinite(n) && n > 0)
-    : undefined;
 
   if (action === "quote") {
     const quote = await quoteGrowthGrant({
