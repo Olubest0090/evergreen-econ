@@ -1,3 +1,4 @@
+import GrantRepayPanel from "./GrantRepayPanel";
 "use client";
 
 import GrowthGrantPanel from "./GrowthGrantPanel";
@@ -137,6 +138,8 @@ export default function GrantsPanel({
 
   return (
     <div className="space-y-3">
+      <GrantRepayPanel />
+
       <GrowthGrantPanel />
       <p className="text-xs text-[var(--muted)]">
         Grants are not deposit balances. They are not collected while the member stays in the

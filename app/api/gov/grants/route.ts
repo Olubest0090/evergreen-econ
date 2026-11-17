@@ -3,6 +3,12 @@ import { requireStaff } from "@/lib/auth";
 import { quoteGrowthGrant, fetchNationGrowth, PROJECT_LIST } from "@/lib/grantCosts";
 import { executeGrowthGrant } from "@/lib/grantGrowth";
 import { collectGrant, applyConvertNegatives } from "@/lib/grants";
+import {
+  getGrantRepaySettings,
+  saveGrantRepaySettings,
+  migrateGrantsForRepay,
+  runGrantRepaySync,
+} from "@/lib/grantRepay";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -46,7 +52,35 @@ export async function GET(req: Request) {
       );
     }
   }
-  return NextResponse.json({ error: "Unknown" }, { status: 400 });
+  
+  if (action === "set_repay_tax") {
+    const tax_id = Number(body.tax_id);
+    if (!Number.isInteger(tax_id) || tax_id <= 0) {
+      return NextResponse.json({ error: "Enter the in-game tax ID for grant repayment (50/50)" }, { status: 400 });
+    }
+    await saveGrantRepaySettings({
+      tax_id,
+      alliance_id: body.alliance_id != null ? Number(body.alliance_id) : undefined,
+    });
+    return NextResponse.json({ ok: true, tax_id });
+  }
+
+  if (action === "migrate_repay") {
+    const r = await migrateGrantsForRepay();
+    return NextResponse.json({ ok: true, ...r });
+  }
+
+  if (action === "run_repay_sync") {
+    const r = await runGrantRepaySync();
+    return NextResponse.json(r);
+  }
+
+  if (action === "repay_status") {
+    const settings = await getGrantRepaySettings();
+    return NextResponse.json({ settings });
+  }
+
+return NextResponse.json({ error: "Unknown" }, { status: 400 });
 }
 
 export async function POST(req: Request) {

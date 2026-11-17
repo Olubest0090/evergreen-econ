@@ -4,6 +4,8 @@ import { db } from "@/lib/supabase";
 import { fetchCities } from "@/lib/pnw";
 import { RESOURCES, LABEL, fmt } from "@/lib/resources";
 import Nav from "@/app/components/Nav";
+import GrantRepayCard from "@/app/components/GrantRepayCard";
+import { getMemberGrantRepayView } from "@/lib/grantRepay";
 import { ResourceAmount, ResourceAmountList } from "@/app/components/ResourceAmount";
 
 type Rule = { base: Record<string, number>; per_city: Record<string, number>; active: boolean };
@@ -25,6 +27,8 @@ export default async function HomePage() {
   const balances = new Map<string, number>(
     (bal ?? []).map((b): [string, number] => [String(b.resource), Number(b.balance)])
   );
+  const grantRepay = await getMemberGrantRepayView(me.id, me.nationId);
+
   const owned = RESOURCES.filter((r) => (balances.get(r) ?? 0) !== 0);
 
   let target: Record<string, number> | null = null;
@@ -87,6 +91,20 @@ export default async function HomePage() {
           Withdraw
         </a>
       </section>
+
+      <GrantRepayCard
+        onRepayTax={grantRepay.onRepayTax}
+        taxId={grantRepay.settings?.tax_id ?? null}
+        totalPct={grantRepay.totalPct}
+        grants={grantRepay.grants.map((g) => ({
+          grantId: g.grantId,
+          grantType: g.grantType,
+          pct: g.pct,
+          remaining: g.remaining,
+          original: g.original,
+          note: g.note,
+        }))}
+      />
 
       <section className="card">
         <h2 className="mb-1 text-sm font-semibold text-[var(--muted)]">Your warchest target</h2>
