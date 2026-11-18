@@ -138,62 +138,61 @@ async function fetchTaxishBankrecs(
   allianceId: number,
   afterId: number
 ): Promise<BankRec[]> {
-  const fields = RES.join(" ");
-  // Paginate a window of recent bankrecs to alliance
-  const data = await gql<{
-    bankrecs: {
-      id: string;
-      date: string;
-      sender_id: number;
-      sender_type: number;
-      receiver_id: number;
-      receiver_type: number;
-      note: string | null;
-    }[] &
-      Record<string, number | null>[];
-  }>(
-    `query($rid:[Int],$min:ID){
-      bankrecs(rtype:2, rid:$rid, min_id:$min, orderBy:{column:ID,order:ASC}, first:100){
-        id date sender_id sender_type receiver_id receiver_type note
-        ${fields}
-      }
-    }`,
-    { rid: [allianceId], min: String(Math.max(1, afterId + 1)) }
-  ).catch(async () => {
-    // Fallback without min_id
-    return gql<{
-      bankrecs: Record<string, unknown>[];
+  // Same paginator shape as lib/bankrecs.ts (BankrecPaginator → data { id ... })
+  const out: BankRec[] = [];
+  let page = 1;
+  while (page <= 15) {
+    const data = await gql<{
+      bankrecs?: {
+        data?: Record<string, unknown>[];
+        paginatorInfo?: { hasMorePages?: boolean };
+      };
     }>(
-      `query($rid:[Int]){
-        bankrecs(rtype:2, rid:$rid, orderBy:{column:ID,order:DESC}, first:100){
-          id date sender_id sender_type receiver_id receiver_type note
-          ${fields}
+      `query($page: Int, $rid: [Int], $rtype: [Int], $stype: [Int]) {
+        bankrecs(
+          first: 100
+          page: $page
+          rid: $rid
+          rtype: $rtype
+          stype: $stype
+          orderBy: [{ column: ID, order: DESC }]
+        ) {
+          data {
+            id date note
+            sid stype rid rtype
+            money food coal oil uranium lead iron bauxite gasoline munitions steel aluminum
+          }
+          paginatorInfo { hasMorePages }
         }
       }`,
-      { rid: [allianceId] }
+      { page, rid: [allianceId], rtype: [2], stype: [1] }
     );
-  });
 
-  const rows = (data as { bankrecs: Record<string, unknown>[] }).bankrecs || [];
-  const out: BankRec[] = [];
-  for (const r of rows) {
-    const id = Number(r.id);
-    if (!Number.isFinite(id) || id <= afterId) continue;
-    const sid = Number(r.sender_id);
-    const stype = Number(r.sender_type);
-    if (stype !== 1) continue; // nations only
-    const amounts = cleanAmounts(r);
-    if (!Object.keys(amounts).length) continue;
-    out.push({
-      id,
-      date: String(r.date || ""),
-      sid,
-      stype,
-      rid: Number(r.receiver_id),
-      rtype: Number(r.receiver_type),
-      note: String(r.note || ""),
-      amounts,
-    });
+    const rows = data.bankrecs?.data ?? [];
+    for (const r of rows) {
+      const id = Number(r.id);
+      if (!Number.isFinite(id) || id <= afterId) continue;
+      const sid = Number(r.sid);
+      const stype = Number(r.stype);
+      if (stype !== 1) continue;
+      const amounts = cleanAmounts(r);
+      if (!Object.keys(amounts).length) continue;
+      out.push({
+        id,
+        date: String(r.date || ""),
+        sid,
+        stype,
+        rid: Number(r.rid),
+        rtype: Number(r.rtype),
+        note: String(r.note || ""),
+        amounts,
+      });
+    }
+    if (!data.bankrecs?.paginatorInfo?.hasMorePages || rows.length === 0) break;
+    // DESC pages: once we see only ids <= afterId we can stop early
+    const minOnPage = Math.min(...rows.map((r) => Number(r.id)).filter(Number.isFinite));
+    if (Number.isFinite(minOnPage) && minOnPage <= afterId) break;
+    page += 1;
   }
   out.sort((a, b) => a.id - b.id);
   return out;
