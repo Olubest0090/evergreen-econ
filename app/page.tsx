@@ -6,6 +6,7 @@ import { RESOURCES, LABEL, fmt } from "@/lib/resources";
 import Nav from "@/app/components/Nav";
 import GrantRepayCard from "@/app/components/GrantRepayCard";
 import { getMemberGrantRepayView } from "@/lib/grantRepay";
+import { fetchNationFlags } from "@/lib/nationFlags";
 import { ResourceAmount, ResourceAmountList } from "@/app/components/ResourceAmount";
 
 type Rule = { base: Record<string, number>; per_city: Record<string, number>; active: boolean };
@@ -29,6 +30,14 @@ export default async function HomePage() {
   );
   const grantRepay = await getMemberGrantRepayView(me.id, me.nationId);
 
+  let flagUrl: string | null = null;
+  try {
+    const flags = await fetchNationFlags([me.nationId]);
+    flagUrl = flags.get(me.nationId) || null;
+  } catch {
+    flagUrl = null;
+  }
+
   const owned = RESOURCES.filter((r) => (balances.get(r) ?? 0) !== 0);
 
   let target: Record<string, number> | null = null;
@@ -49,13 +58,24 @@ export default async function HomePage() {
 
   return (
     <main className="mx-auto min-h-screen max-w-lg space-y-4 px-4 pb-24 pt-5">
-      <header>
-        <p className="text-sm text-[var(--muted)]">Welcome back</p>
-        <h1 className="text-2xl font-bold">{me.leaderName ?? me.username}</h1>
-        <p className="text-xs text-[var(--muted)]">
-          {me.nationName} · Nation #{me.nationId}
-          {me.staff && <span className="chip chip-gold ml-2">econ staff</span>}
-        </p>
+      <header className="flex items-center gap-3">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={flagUrl || "https://politicsandwar.com/img/default.jpg"}
+          alt=""
+          width={56}
+          height={56}
+          className="h-14 w-14 shrink-0 rounded-xl object-cover bg-black/30 ring-1 ring-white/10"
+          referrerPolicy="no-referrer"
+        />
+        <div className="min-w-0">
+          <p className="text-sm text-[var(--muted)]">Welcome back</p>
+          <h1 className="truncate text-2xl font-bold">{me.leaderName ?? me.username}</h1>
+          <p className="text-xs text-[var(--muted)]">
+            {me.nationName} · Nation #{me.nationId}
+            {me.staff && <span className="chip chip-gold ml-2">econ staff</span>}
+          </p>
+        </div>
       </header>
 
       <section className="card">
