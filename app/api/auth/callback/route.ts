@@ -15,6 +15,7 @@ import {
 
 type Alliance = { alliance_id: number | null; guild_id: string | null };
 type Roles = { guild_id: string | null; role_ids: string[] };
+type Offshore = { offshore_alliance_id?: number | null };
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -34,14 +35,13 @@ export async function GET(req: Request) {
   };
 
   try {
-    
-  const ip = clientIp(req);
-  if (await isLoginRateLimited(ip)) {
-    await recordLoginAttempt({ ip, success: false, reason: "rate_limited" });
-    return fail("rate");
-  }
+    const ip = clientIp(req);
+    if (await isLoginRateLimited(ip)) {
+      await recordLoginAttempt({ ip, success: false, reason: "rate_limited" });
+      return fail("rate");
+    }
 
-  const code = url.searchParams.get("code");
+    const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
     const cookieState = req.headers
       .get("cookie")
@@ -57,14 +57,14 @@ export async function GET(req: Request) {
     const { data: rows } = await supa
       .from("econ_settings")
       .select("key, value")
-      .in("key", ["alliance", "econ_staff_roles", "member_roles"]);
+      .in("key", ["alliance", "econ_staff_roles", "member_roles", "offshore"]);
     const alliance = (rows?.find((row) => row.key === "alliance")?.value ?? {}) as Alliance;
     const roleCfg = (rows?.find((row) => row.key === "econ_staff_roles")?.value ?? {}) as Roles;
     const memberCfg = (rows?.find((row) => row.key === "member_roles")?.value ?? {}) as Roles;
+    const offshore = (rows?.find((row) => row.key === "offshore")?.value ?? {}) as Offshore;
     if (!alliance.alliance_id || !alliance.guild_id) return fail("setup");
 
     // Hard exceptions: Discord user IDs allowed even if guild membership API fails
-    // (e.g. Poperti 1496974130422218833)
     const LOGIN_EXCEPTIONS = new Set(
       String(process.env.LOGIN_DISCORD_EXCEPTIONS || "1496974130422218833")
         .split(/[\s,]+/)
@@ -84,14 +84,19 @@ export async function GET(req: Request) {
     let isMember = (memberCfg.role_ids ?? []).some((id) =>
       guildMember!.roles.includes(String(id))
     );
-    // Exception users without readable roles still count as members
     if (!staff && !isMember && isException) {
       console.warn("login exception: granting member access", user.id, user.username);
       isMember = true;
     }
-    if (!staff && !isMember) return fail("not_member");
 
-    const allianceIds = [...new Set([Number(alliance.alliance_id), 15718].filter((n) => n > 0))];
+    // Allowed in-game alliances: main Evergreen + configured offshore (fallback 15718)
+    const offshoreId = Number(offshore.offshore_alliance_id || 0) || 15718;
+    const allianceIds = [
+      ...new Set(
+        [Number(alliance.alliance_id), offshoreId].filter((n) => Number.isFinite(n) && n > 0)
+      ),
+    ];
+
     const nationGroups = await Promise.all(allianceIds.map((id) => fetchAllianceNations(id)));
     const nations = nationGroups.flat();
 
@@ -105,7 +110,25 @@ export async function GET(req: Request) {
     if (matches.length === 0) return fail("no_nation");
     if (matches.length > 1) return fail("ambiguous");
     const nation = matches[0];
-    if ((nation.alliance_position || "").toUpperCase() === "APPLICANT") return fail("not_in_alliance");
+    if ((nation.alliance_position || "").toUpperCase() === "APPLICANT") {
+      return fail("not_in_alliance");
+    }
+
+    // In main or offshore AA → allowed even without Discord Member role
+    // (role still preferred for staff; exceptions already handled)
+    const inAllowedAlliance = true; // matched from allowed alliance list above
+    if (!staff && !isMember && !inAllowedAlliance) return fail("not_member");
+    // If they have no member role but nation is in AA, still log them in as member
+    if (!staff && !isMember && inAllowedAlliance) {
+      console.log(
+        "login: alliance member without Discord Member role — allowing",
+        user.id,
+        user.username,
+        "nation",
+        nation.id
+      );
+      isMember = true;
+    }
 
     const nationId = Number(nation.id);
     const { data: existing } = await supa
@@ -139,7 +162,6 @@ export async function GET(req: Request) {
       .eq("nation_id", nationId)
       .maybeSingle();
 
-    // Auto-credit Locutus pending deposits on first (and every) login — never block login
     if (mem?.id) {
       try {
         const claim = await claimLocutusPendingForNation(nationId, mem.id);

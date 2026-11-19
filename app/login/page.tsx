@@ -5,11 +5,10 @@ const MESSAGES: Record<string, string> = {
   discord: "Discord didn't accept the sign-in. Please try again.",
   setup: "The site isn't fully set up yet. Tell an econ staff member.",
   not_in_server: "Discord could not confirm you are in the Evergreen server. Open the Evergreen Discord, stay online there, then try Log in with Discord again. If it keeps failing, ask econ staff to check the server (guild) ID on the site.",
-  no_nation:
-    "We couldn't find a nation in Evergreen with your Discord name. In Politics & War, open your account settings, set your Discord username there, then try again.",
+  no_nation: "No nation found in Evergreen or the offshore alliance matching your Discord name. Set Discord on your nation page exactly.",
   ambiguous: "More than one nation uses your Discord name. Ask an econ staff member to help.",
   not_in_alliance: "Your nation is still an applicant in Evergreen. Try again once you are accepted.",
-  not_member: "You need the Member role in the Evergreen Discord server to use this site.",
+  not_member: "You need the Member role in the Evergreen Discord server, or a nation in Evergreen / the offshore alliance with Discord linked.",
   suspended: "Your account is frozen. Contact econ staff.",
   server: "Something went wrong on our side. Please try again in a minute.",
 };
