@@ -5,6 +5,7 @@ import GrowthGrantPanel from "./GrowthGrantPanel";
 
 import { useCallback, useEffect, useState } from "react";
 import { RESOURCES, LABEL, fmt } from "@/lib/resources";
+import NationFlag from "@/app/components/NationFlag";
 
 type Grant = {
   id: string;
@@ -22,6 +23,7 @@ type Grant = {
   collected_by: string | null;
   collected_amounts: Record<string, number> | null;
   collect_note: string | null;
+  flag?: string | null;
 };
 
 const TYPE_LABEL: Record<string, string> = {
@@ -204,12 +206,20 @@ export default function GrantsPanel({
       ) : (
         grants.map((g) => (
           <div key={g.id} className="card space-y-1 text-sm">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="font-semibold">
-                {g.leader_name || g.nation_name || "Nation"}{" "}
-                <span className="text-[var(--muted)] font-normal">#{g.nation_id}</span>
-              </p>
-              <span className="chip">{TYPE_LABEL[g.grant_type] || g.grant_type}</span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <NationFlag src={g.flag} nationId={g.nation_id} size={40} />
+                <div className="min-w-0">
+                  <p className="font-semibold truncate">
+                    {g.leader_name || g.nation_name || "Nation"}
+                  </p>
+                  <p className="text-xs text-[var(--muted)] truncate">
+                    {g.nation_name && g.leader_name ? g.nation_name + " · " : ""}
+                    #{g.nation_id}
+                  </p>
+                </div>
+              </div>
+              <span className="chip shrink-0">{TYPE_LABEL[g.grant_type] || g.grant_type}</span>
             </div>
             <p className="text-xs text-[var(--muted)]">
               {g.status} · issued {new Date(g.issued_at).toLocaleString()}

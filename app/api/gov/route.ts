@@ -13,6 +13,7 @@ import {
   collectGrant,
   issueGrant,
 } from "@/lib/grants";
+import { fetchNationFlags } from "@/lib/nationFlags";
 import { fetchSheetCsv } from "@/lib/gsheet";
 import { fetchAllianceHoldings, fetchLatestMarketPrices } from "@/lib/pnw";
 import { rejectIfLocked } from "@/lib/lockdownGate";
@@ -108,10 +109,21 @@ export async function GET(req: Request) {
     try {
       const rows = await listGrants({
         status: status || undefined,
-        nationId: nationId > 0 ? nationId : undefined,
-        limit: 300,
+        limit: 200,
       });
-      return NextResponse.json({ grants: rows });
+      let flags: Record<string, string> = {};
+      try {
+        const fmap = await fetchNationFlags(rows.map((g) => Number(g.nation_id)));
+        flags = Object.fromEntries([...fmap.entries()].map(([k, v]) => [String(k), v]));
+      } catch {
+        /* flags optional */
+      }
+      return NextResponse.json({
+        grants: rows.map((g) => ({
+          ...g,
+          flag: flags[String(g.nation_id)] || null,
+        })),
+      });
     } catch (e) {
       return NextResponse.json(
         { error: e instanceof Error ? e.message : "Could not load grants" },
