@@ -8,6 +8,7 @@ import {
   saveGrantRepaySettings,
   migrateGrantsForRepay,
   runGrantRepaySync,
+  backfillGrantsFromPaidRequests,
 } from "@/lib/grantRepay";
 
 export const dynamic = "force-dynamic";
@@ -89,7 +90,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, tax_id });
   }
 
-  if (action === "migrate_repay") {
+  
+  if (action === "backfill_request_grants") {
+    const r = await backfillGrantsFromPaidRequests();
+    return NextResponse.json({ ok: true, ...r });
+  }
+if (action === "migrate_repay") {
     const r = await migrateGrantsForRepay();
     return NextResponse.json({ ok: true, ...r });
   }

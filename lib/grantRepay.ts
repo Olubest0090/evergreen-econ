@@ -461,3 +461,77 @@ export async function migrateGrantsForRepay(): Promise<{ updated: number }> {
   }
   return { updated };
 }
+
+
+/**
+ * One-time / gov: create econ_grants rows from paid GRANT requests that were never tracked.
+ * Skips warchest. Idempotent via meta.request_id.
+ */
+export async function backfillGrantsFromPaidRequests(): Promise<{
+  created: number;
+  skipped: number;
+  errors: string[];
+}> {
+  const supa = db();
+  const errors: string[] = [];
+  let created = 0;
+  let skipped = 0;
+
+  const { data: paid, error } = await supa
+    .from("econ_requests")
+    .select("id, amounts, purpose, member_id, decided_by, econ_members(nation_id, leader_name, discord_id, nation_name)")
+    .eq("kind", "grant")
+    .eq("status", "paid")
+    .limit(2000);
+  if (error) return { created: 0, skipped: 0, errors: [error.message] };
+
+  for (const req of paid ?? []) {
+    const { count } = await supa
+      .from("econ_grants")
+      .select("id", { count: "exact", head: true })
+      .contains("meta", { request_id: req.id });
+    if ((count ?? 0) > 0) {
+      skipped += 1;
+      continue;
+    }
+    // also skip if meta filter unsupported — check by note
+    const mem = Array.isArray(req.econ_members) ? req.econ_members[0] : req.econ_members;
+    const nationId = Number((mem as { nation_id?: number } | null)?.nation_id || 0);
+    if (!nationId) {
+      skipped += 1;
+      continue;
+    }
+    const amounts = (req.amounts || {}) as Record<string, number>;
+    const clean: Record<string, number> = {};
+    for (const [k, v] of Object.entries(amounts)) {
+      const n = Math.round(Number(v) * 100) / 100;
+      if (Number.isFinite(n) && n > 0) clean[k] = n;
+    }
+    if (!Object.keys(clean).length) {
+      skipped += 1;
+      continue;
+    }
+    const { error: insErr } = await supa.from("econ_grants").insert({
+      member_id: req.member_id,
+      nation_id: nationId,
+      leader_name: (mem as { leader_name?: string } | null)?.leader_name ?? null,
+      nation_name: (mem as { nation_name?: string } | null)?.nation_name ?? null,
+      discord_id: (mem as { discord_id?: string } | null)?.discord_id
+        ? String((mem as { discord_id?: string }).discord_id)
+        : null,
+      grant_type: "request",
+      amounts: clean,
+      original_amounts: clean,
+      repaid_amounts: {},
+      repay_status: "open",
+      meta: { source: "grant_request_backfill", request_id: req.id },
+      status: "active",
+      note: req.purpose ? String(req.purpose) : `Backfill grant ${String(req.id).slice(0, 8)}`,
+      issued_by: req.decided_by || "backfill",
+      approved_by: req.decided_by || "backfill",
+    });
+    if (insErr) errors.push(`${req.id}: ${insErr.message}`);
+    else created += 1;
+  }
+  return { created, skipped, errors };
+}

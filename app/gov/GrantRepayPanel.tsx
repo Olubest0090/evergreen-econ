@@ -68,6 +68,25 @@ export default function GrantRepayPanel() {
     }
   }
 
+  async function backfill() {
+    setBusy(true);
+    setMsg("");
+    try {
+      const r = await fetch("/api/gov/grants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "backfill_request_grants" }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Backfill failed");
+      setMsg(`Imported ${j.created ?? 0} paid grants for the progress bar (${j.skipped ?? 0} already tracked)`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function syncNow() {
     setBusy(true);
     setMsg("");
@@ -117,6 +136,14 @@ export default function GrantRepayPanel() {
         </button>
         <button type="button" className="btn-ghost" disabled={busy} onClick={() => void syncNow()}>
           Run repay sync now
+        </button>
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy}
+          onClick={() => void backfill()}
+        >
+          Import paid grants → bar
         </button>
       </div>
       {msg && <p className="text-xs">{msg}</p>}

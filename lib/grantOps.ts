@@ -63,6 +63,43 @@ export async function approveAndSendGrantRequest(
     };
   }
 
+  // GRANT requests only: track for tax repayment bar on member Home
+  if (req.kind === "grant") {
+    try {
+      const clean: Record<string, number> = {};
+      for (const [k, v] of Object.entries(amounts || {})) {
+        const n = Math.round(Number(v) * 100) / 100;
+        if (Number.isFinite(n) && n > 0) clean[k] = n;
+      }
+      if (Object.keys(clean).length) {
+        const memRow = mem as {
+          nation_id?: number;
+          leader_name?: string | null;
+          discord_id?: string | null;
+        } | null;
+        await supa.from("econ_grants").insert({
+          member_id: req.member_id,
+          nation_id: nationId,
+          leader_name: memRow?.leader_name ?? null,
+          nation_name: null,
+          discord_id: memRow?.discord_id ? String(memRow.discord_id) : null,
+          grant_type: "request",
+          amounts: clean,
+          original_amounts: clean,
+          repaid_amounts: {},
+          repay_status: "open",
+          meta: { source: "grant_request", request_id: requestId, bank_record: result.id },
+          status: "active",
+          note: req.purpose ? String(req.purpose) : `Grant request ${requestId.slice(0, 8)}`,
+          issued_by: actorDiscordId,
+          approved_by: actorDiscordId,
+        });
+      }
+    } catch (e) {
+      console.error("econ_grants insert after grant send:", e);
+    }
+  }
+
   await supa.from("econ_audit_log").insert({
     actor_discord_id: actorDiscordId,
     action: "request_discord_sent",
