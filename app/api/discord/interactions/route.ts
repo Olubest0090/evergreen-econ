@@ -7,6 +7,11 @@ import {
   approveAndSendGrantRequest,
   denyGrantRequest,
 } from "@/lib/grantOps";
+import {
+  econRoleId,
+  formatDepositsValueReply,
+  formatOffshoreBalanceReply,
+} from "@/lib/econDiscordPanel";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -54,7 +59,7 @@ export async function POST(req: Request) {
 
   let interaction: {
     type: number;
-    member?: { user?: { id?: string } };
+    member?: { user?: { id?: string }; roles?: string[] };
     user?: { id?: string };
     data?: { custom_id?: string };
   };
@@ -73,7 +78,20 @@ export async function POST(req: Request) {
     const actor =
       interaction.member?.user?.id || interaction.user?.id || "discord";
 
-    if (customId === "offshore_send_all") {
+
+    // Econ control panel
+    if (customId === "econ_panel_offshore" || customId === "offshore_send_all") {
+      const role = await econRoleId();
+      const roles = interaction.member?.roles || [];
+      if (role && !roles.includes(role)) {
+        return NextResponse.json({
+          type: 4,
+          data: {
+            content: "❌ Only the econ role can run Offshore now.",
+            flags: 64,
+          },
+        });
+      }
       const result = await executeOffshoreSendAll(actor);
       if (!result.ok) {
         return NextResponse.json({
@@ -87,11 +105,49 @@ export async function POST(req: Request) {
       return NextResponse.json({
         type: 4,
         data: {
-          content: `✅ Main → offshore.\n${lines}${
-            result.record ? `\nRecord #${result.record}` : ""
+          content: `✅ Main → offshore.
+${lines}${
+            result.record ? `
+Record #${result.record}` : ""
           }`,
         },
       });
+    }
+
+    if (customId === "econ_panel_offshore_bal") {
+      try {
+        const text = await formatOffshoreBalanceReply();
+        return NextResponse.json({
+          type: 4,
+          data: { content: text, flags: 64 },
+        });
+      } catch (e) {
+        return NextResponse.json({
+          type: 4,
+          data: {
+            content: `❌ ${e instanceof Error ? e.message : "Could not read offshore"}`,
+            flags: 64,
+          },
+        });
+      }
+    }
+
+    if (customId === "econ_panel_deposits") {
+      try {
+        const text = await formatDepositsValueReply();
+        return NextResponse.json({
+          type: 4,
+          data: { content: text, flags: 64 },
+        });
+      } catch (e) {
+        return NextResponse.json({
+          type: 4,
+          data: {
+            content: `❌ ${e instanceof Error ? e.message : "Could not sum deposits"}`,
+            flags: 64,
+          },
+        });
+      }
     }
 
     // Requests page GRANT
