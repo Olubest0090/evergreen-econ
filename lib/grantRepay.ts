@@ -265,13 +265,16 @@ export async function getMemberGrantRepayView(
   let totalR = 0;
   for (const g of grants ?? []) {
     const original = cleanAmounts(g.original_amounts || g.amounts);
-    const repaid = { ...(g.repaid_amounts as Record<string, number> | null) } || {};
     const oVal = amountsValue(original);
-    const rVal = repaidValueOf(cleanAmounts(repaid) as Record<string, number> & { _value?: number });
     // _value may be stripped by cleanAmounts — read raw
-    const rawRepaid = (g.repaid_amounts || {}) as Record<string, number>;
+    const rawRepaid =
+      g.repaid_amounts && typeof g.repaid_amounts === "object"
+        ? (g.repaid_amounts as Record<string, number>)
+        : {};
     const repaidValue =
-      Number(rawRepaid._value) > 0 ? Number(rawRepaid._value) : amountsValue(cleanAmounts(rawRepaid));
+      Number(rawRepaid._value) > 0
+        ? Number(rawRepaid._value)
+        : amountsValue(cleanAmounts(rawRepaid));
     const remainingValue = Math.max(0, Math.round((oVal - repaidValue) * 100) / 100);
     const pct = progressPctFromValues(oVal, repaidValue);
     totalO += oVal;
