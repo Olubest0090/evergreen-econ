@@ -101,7 +101,7 @@ if (action === "migrate_repay") {
   }
 
   if (action === "run_repay_sync") {
-    const r = await runGrantRepaySync();
+    const r = await runGrantRepaySync({ resetCursor: body.resetCursor === true });
     return NextResponse.json(r);
   }
 

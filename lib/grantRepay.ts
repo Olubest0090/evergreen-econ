@@ -1,5 +1,7 @@
 /**
  * Grant repayment: members on the configured tax ID auto-pay via tax bankrecs.
+ * Progress is VALUE-based (estimated $), not resource-matched.
+ * Steel grant + money/food tax still pays the bar down.
  * If they are NOT on that tax ID, the progress bar does not move.
  */
 import { db } from "@/lib/supabase";
@@ -8,54 +10,60 @@ import { getPnwApiKey, getBankApiKey } from "@/lib/secrets";
 import { RESOURCES } from "@/lib/resources";
 
 export type GrantRepaySettings = {
-  /** In-game tax bracket ID for grant repayment (e.g. 50/50). */
   tax_id: number;
   alliance_id?: number;
 };
 
-const RES = RESOURCES as readonly string[];
+const RES = ["money", "food", "coal", "oil", "uranium", "lead", "iron", "bauxite", "gasoline", "munitions", "steel", "aluminum"] as const;
+
+/** Coarse $ estimates (progress only). Money is 1:1. */
+export const VALUE_WEIGHTS: Record<string, number> = {
+  money: 1,
+  food: 100,
+  coal: 3500,
+  oil: 3500,
+  uranium: 3000,
+  lead: 3000,
+  iron: 3000,
+  bauxite: 3000,
+  gasoline: 3500,
+  munitions: 2500,
+  steel: 4000,
+  aluminum: 3000,
+};
 
 function cleanAmounts(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {};
   if (!raw || typeof raw !== "object") return out;
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (!RES.includes(k) && k !== "money") continue;
+    if (!(RES as readonly string[]).includes(k)) continue;
     const n = Math.round(Number(v) * 100) / 100;
     if (Number.isFinite(n) && n > 0) out[k] = n;
   }
   return out;
 }
 
-/** Rough $ value for progress only (not market-perfect). */
 export function amountsValue(a: Record<string, number>): number {
-  // Prefer money; other resources count at coarse placeholders so the bar still moves
-  const weights: Record<string, number> = {
-    money: 1,
-    food: 100,
-    coal: 3000,
-    oil: 3000,
-    uranium: 2500,
-    lead: 2500,
-    iron: 2500,
-    bauxite: 2500,
-    gasoline: 3000,
-    munitions: 2000,
-    steel: 3500,
-    aluminum: 2500,
-  };
   let v = 0;
   for (const [k, n] of Object.entries(a)) {
-    v += Math.abs(Number(n) || 0) * (weights[k] ?? 1000);
+    v += Math.abs(Number(n) || 0) * (VALUE_WEIGHTS[k] ?? 1000);
   }
-  return v;
+  return Math.round(v * 100) / 100;
+}
+
+export function progressPctFromValues(originalValue: number, repaidValue: number): number {
+  if (originalValue <= 0) return 100;
+  return Math.max(0, Math.min(100, Math.round((repaidValue / originalValue) * 1000) / 10));
 }
 
 export function remainingAmounts(
   original: Record<string, number>,
   repaid: Record<string, number>
 ): Record<string, number> {
+  // Kept for display of original composition; value-based remaining is separate
   const out: Record<string, number> = {};
   for (const k of new Set([...Object.keys(original), ...Object.keys(repaid)])) {
+    if (k === "_value") continue;
     const left = Math.round(((Number(original[k]) || 0) - (Number(repaid[k]) || 0)) * 100) / 100;
     if (left > 0.01) out[k] = left;
   }
@@ -67,9 +75,8 @@ export function progressPct(
   repaid: Record<string, number>
 ): number {
   const o = amountsValue(original);
-  if (o <= 0) return 100;
-  const r = amountsValue(repaid);
-  return Math.max(0, Math.min(100, Math.round((r / o) * 1000) / 10));
+  const r = Number(repaid._value) > 0 ? Number(repaid._value) : amountsValue(repaid);
+  return progressPctFromValues(o, r);
 }
 
 export async function getGrantRepaySettings(): Promise<GrantRepaySettings | null> {
@@ -103,7 +110,6 @@ async function gql<T>(query: string, variables: Record<string, unknown>): Promis
   return json.data as T;
 }
 
-/** Nation IDs currently on the repayment tax bracket. */
 export async function fetchNationIdsOnTax(
   allianceId: number,
   taxId: number
@@ -138,10 +144,9 @@ async function fetchTaxishBankrecs(
   allianceId: number,
   afterId: number
 ): Promise<BankRec[]> {
-  // Same paginator shape as lib/bankrecs.ts (BankrecPaginator → data { id ... })
   const out: BankRec[] = [];
   let page = 1;
-  while (page <= 15) {
+  while (page <= 20) {
     const data = await gql<{
       bankrecs?: {
         data?: Record<string, unknown>[];
@@ -189,7 +194,6 @@ async function fetchTaxishBankrecs(
       });
     }
     if (!data.bankrecs?.paginatorInfo?.hasMorePages || rows.length === 0) break;
-    // DESC pages: once we see only ids <= afterId we can stop early
     const minOnPage = Math.min(...rows.map((r) => Number(r.id)).filter(Number.isFinite));
     if (Number.isFinite(minOnPage) && minOnPage <= afterId) break;
     page += 1;
@@ -198,25 +202,9 @@ async function fetchTaxishBankrecs(
   return out;
 }
 
-function applyRepay(
-  remaining: Record<string, number>,
-  payment: Record<string, number>
-): { nextRepaidDelta: Record<string, number>; still: Record<string, number> } {
-  const still = { ...remaining };
-  const nextRepaidDelta: Record<string, number> = {};
-  // Apply matching resources first, then money against any leftover value is NOT done —
-  // only matching resources + money against money remaining.
-  for (const k of Object.keys(payment)) {
-    const pay = Number(payment[k]) || 0;
-    if (pay <= 0) continue;
-    const owe = Number(still[k]) || 0;
-    if (owe <= 0) continue;
-    const used = Math.min(pay, owe);
-    nextRepaidDelta[k] = Math.round(used * 100) / 100;
-    still[k] = Math.round((owe - used) * 100) / 100;
-    if (still[k] <= 0.01) delete still[k];
-  }
-  return { nextRepaidDelta, still };
+function repaidValueOf(repaid: Record<string, number>): number {
+  if (Number(repaid._value) > 0) return Number(repaid._value);
+  return amountsValue(repaid);
 }
 
 export type MemberGrantRepayView = {
@@ -225,14 +213,16 @@ export type MemberGrantRepayView = {
   original: Record<string, number>;
   repaid: Record<string, number>;
   remaining: Record<string, number>;
+  originalValue: number;
+  repaidValue: number;
+  remainingValue: number;
   pct: number;
   status: string;
-  onRepayTax: boolean | null; // null = tax id not configured / unknown
+  onRepayTax: boolean | null;
   issuedAt: string;
   note: string | null;
 };
 
-/** Member-facing: only their open grants + progress. */
 export async function getMemberGrantRepayView(
   memberId: string,
   nationId: number
@@ -260,11 +250,7 @@ export async function getMemberGrantRepayView(
     try {
       const alliance =
         settings.alliance_id ||
-        Number(
-          (
-            await getSetting<{ alliance_id?: number }>("alliance", {})
-          ).alliance_id || 0
-        );
+        Number((await getSetting<{ alliance_id?: number }>("alliance", {})).alliance_id || 0);
       if (alliance) {
         const onTax = await fetchNationIdsOnTax(alliance, settings.tax_id);
         onRepayTax = onTax.has(nationId);
@@ -279,20 +265,27 @@ export async function getMemberGrantRepayView(
   let totalR = 0;
   for (const g of grants ?? []) {
     const original = cleanAmounts(g.original_amounts || g.amounts);
-    const repaid = cleanAmounts(g.repaid_amounts);
-    const remaining = remainingAmounts(original, repaid);
-    if (Object.keys(remaining).length === 0 && g.repay_status === "paid") {
-      // still show paid? skip fully paid from member card or show 100%
-    }
-    const pct = progressPct(original, repaid);
-    totalO += amountsValue(original);
-    totalR += amountsValue(repaid);
+    const repaid = { ...(g.repaid_amounts as Record<string, number> | null) } || {};
+    const oVal = amountsValue(original);
+    const rVal = repaidValueOf(cleanAmounts(repaid) as Record<string, number> & { _value?: number });
+    // _value may be stripped by cleanAmounts — read raw
+    const rawRepaid = (g.repaid_amounts || {}) as Record<string, number>;
+    const repaidValue =
+      Number(rawRepaid._value) > 0 ? Number(rawRepaid._value) : amountsValue(cleanAmounts(rawRepaid));
+    const remainingValue = Math.max(0, Math.round((oVal - repaidValue) * 100) / 100);
+    const pct = progressPctFromValues(oVal, repaidValue);
+    totalO += oVal;
+    totalR += repaidValue;
+    if (remainingValue <= 0.01 && pct >= 100) continue;
     views.push({
       grantId: g.id,
       grantType: String(g.grant_type),
       original,
-      repaid,
-      remaining,
+      repaid: rawRepaid,
+      remaining: remainingAmounts(original, cleanAmounts(rawRepaid)),
+      originalValue: oVal,
+      repaidValue,
+      remainingValue,
       pct,
       status: String(g.repay_status || "open"),
       onRepayTax,
@@ -301,65 +294,99 @@ export async function getMemberGrantRepayView(
     });
   }
 
-  const open = views.filter((v) => Object.keys(v.remaining).length > 0);
   const totalPct =
-    totalO <= 0 ? 100 : Math.max(0, Math.min(100, Math.round((totalR / totalO) * 1000) / 10));
+    totalO <= 0 ? (views.length ? 100 : 0) : progressPctFromValues(totalO, totalR);
 
   return {
     settings,
     onRepayTax,
-    grants: open.length ? open : views.filter((v) => v.pct < 100).slice(0, 10),
-    totalPct: open.length ? totalPct : views.length ? 100 : 0,
+    grants: views,
+    totalPct,
     totalOriginal: totalO,
     totalRepaid: totalR,
   };
 }
 
 /**
- * Cron: apply tax bankrecs to grants for nations currently on repay tax_id only.
+ * Cron: apply tax bankrecs by ESTIMATED VALUE (not resource match).
+ * Oldest open grant first (FIFO). One bankrec value is not double-counted across grants.
  */
-export async function runGrantRepaySync(): Promise<{
+export async function runGrantRepaySync(opts?: {
+  resetCursor?: boolean;
+}): Promise<{
   ok: boolean;
   skipped?: string;
   onTax: number;
   applied: number;
+  valueApplied: number;
   grantsTouched: number;
+  bankrecsSeen: number;
   errors: string[];
 }> {
   const settings = await getGrantRepaySettings();
   if (!settings?.tax_id) {
-    return { ok: true, skipped: "grant_repay.tax_id not set", onTax: 0, applied: 0, grantsTouched: 0, errors: [] };
+    return {
+      ok: true,
+      skipped: "grant_repay.tax_id not set",
+      onTax: 0,
+      applied: 0,
+      valueApplied: 0,
+      grantsTouched: 0,
+      bankrecsSeen: 0,
+      errors: [],
+    };
   }
 
   const allianceCfg = await getSetting<{ alliance_id?: number }>("alliance", {});
   const allianceId = Number(settings.alliance_id || allianceCfg.alliance_id || 0);
   if (!allianceId) {
-    return { ok: false, skipped: "alliance_id missing", onTax: 0, applied: 0, grantsTouched: 0, errors: ["no alliance"] };
+    return {
+      ok: false,
+      skipped: "alliance_id missing",
+      onTax: 0,
+      applied: 0,
+      valueApplied: 0,
+      grantsTouched: 0,
+      bankrecsSeen: 0,
+      errors: ["no alliance"],
+    };
   }
 
   const errors: string[] = [];
-  let onTax = 0;
   let applied = 0;
+  let valueApplied = 0;
   const touched = new Set<string>();
 
   let onTaxNations: Set<number>;
   try {
     onTaxNations = await fetchNationIdsOnTax(allianceId, settings.tax_id);
-    onTax = onTaxNations.size;
   } catch (e) {
     return {
       ok: false,
       onTax: 0,
       applied: 0,
+      valueApplied: 0,
       grantsTouched: 0,
+      bankrecsSeen: 0,
       errors: [e instanceof Error ? e.message : "tax roster failed"],
     };
   }
 
   if (onTaxNations.size === 0) {
-    return { ok: true, onTax: 0, applied: 0, grantsTouched: 0, errors: [] };
+    return {
+      ok: true,
+      onTax: 0,
+      applied: 0,
+      valueApplied: 0,
+      grantsTouched: 0,
+      bankrecsSeen: 0,
+      errors: [],
+    };
   }
 
+  if (opts?.resetCursor) {
+    await setSetting("grant_repay_cursor", { last_bankrec_id: 0 });
+  }
   const cursor = await getSetting<{ last_bankrec_id?: number }>("grant_repay_cursor", {});
   const afterId = Number(cursor.last_bankrec_id || 0);
 
@@ -368,7 +395,15 @@ export async function runGrantRepaySync(): Promise<{
     recs = await fetchTaxishBankrecs(allianceId, afterId);
   } catch (e) {
     errors.push(e instanceof Error ? e.message : "bankrecs failed");
-    return { ok: false, onTax, applied: 0, grantsTouched: 0, errors };
+    return {
+      ok: false,
+      onTax: onTaxNations.size,
+      applied: 0,
+      valueApplied: 0,
+      grantsTouched: 0,
+      bankrecsSeen: 0,
+      errors,
+    };
   }
 
   const supa = db();
@@ -376,51 +411,58 @@ export async function runGrantRepaySync(): Promise<{
 
   for (const rec of recs) {
     maxId = Math.max(maxId, rec.id);
-    if (!onTaxNations.has(rec.sid)) continue; // not on repay tax → bar does not move
+    if (!onTaxNations.has(rec.sid)) continue;
 
-    // Active grants for this nation
+    let valueLeft = amountsValue(rec.amounts);
+    if (valueLeft <= 0) continue;
+
     const { data: grants } = await supa
       .from("econ_grants")
-      .select("id, amounts, original_amounts, repaid_amounts, repay_status")
+      .select("id, amounts, original_amounts, repaid_amounts, repay_status, issued_at")
       .eq("nation_id", rec.sid)
-      .eq("status", "active");
+      .eq("status", "active")
+      .order("issued_at", { ascending: true });
 
     if (!grants?.length) continue;
 
     for (const g of grants) {
-      const original = cleanAmounts(g.original_amounts || g.amounts);
-      const repaid = cleanAmounts(g.repaid_amounts);
-      const remaining = remainingAmounts(original, repaid);
-      if (!Object.keys(remaining).length) continue;
+      if (valueLeft <= 0.01) break;
 
-      // Idempotent credit
+      const original = cleanAmounts(g.original_amounts || g.amounts);
+      const oVal = amountsValue(original);
+      if (oVal <= 0) continue;
+
+      const rawRepaid = { ...((g.repaid_amounts || {}) as Record<string, number>) };
+      const already = Number(rawRepaid._value) > 0 ? Number(rawRepaid._value) : amountsValue(cleanAmounts(rawRepaid));
+      const need = Math.max(0, oVal - already);
+      if (need <= 0.01) continue;
+
+      // Idempotent per grant+bankrec
       const { error: insErr } = await supa.from("econ_grant_tax_credits").insert({
         bankrec_id: rec.id,
         grant_id: g.id,
-        amounts: rec.amounts,
+        amounts: { ...rec.amounts, _value: Math.min(valueLeft, need) },
       });
       if (insErr) {
-        // duplicate → skip
         if (/duplicate|unique/i.test(insErr.message)) continue;
         errors.push(insErr.message);
         continue;
       }
 
-      const { nextRepaidDelta } = applyRepay(remaining, rec.amounts);
-      if (!Object.keys(nextRepaidDelta).length) continue;
-
-      const newRepaid = { ...repaid };
-      for (const [k, v] of Object.entries(nextRepaidDelta)) {
-        newRepaid[k] = Math.round(((newRepaid[k] || 0) + v) * 100) / 100;
-      }
-      const still = remainingAmounts(original, newRepaid);
-      const repay_status = Object.keys(still).length ? "paying" : "paid";
+      const take = Math.min(valueLeft, need);
+      const newVal = Math.round((already + take) * 100) / 100;
+      const repay_status = newVal >= oVal - 0.01 ? "paid" : "paying";
 
       await supa
         .from("econ_grants")
-        .update({ repaid_amounts: newRepaid, repay_status })
+        .update({
+          repaid_amounts: { ...rawRepaid, _value: newVal },
+          repay_status,
+        })
         .eq("id", g.id);
 
+      valueLeft = Math.round((valueLeft - take) * 100) / 100;
+      valueApplied += take;
       applied += 1;
       touched.add(g.id);
     }
@@ -432,14 +474,15 @@ export async function runGrantRepaySync(): Promise<{
 
   return {
     ok: true,
-    onTax,
+    onTax: onTaxNations.size,
     applied,
+    valueApplied: Math.round(valueApplied * 100) / 100,
     grantsTouched: touched.size,
+    bankrecsSeen: recs.length,
     errors,
   };
 }
 
-/** One-time: ensure original_amounts set for all active grants (migration). */
 export async function migrateGrantsForRepay(): Promise<{ updated: number }> {
   const supa = db();
   const { data } = await supa
@@ -462,10 +505,8 @@ export async function migrateGrantsForRepay(): Promise<{ updated: number }> {
   return { updated };
 }
 
-
 /**
  * One-time / gov: create econ_grants rows from paid GRANT requests that were never tracked.
- * Skips warchest. Idempotent via meta.request_id.
  */
 export async function backfillGrantsFromPaidRequests(): Promise<{
   created: number;
@@ -479,7 +520,9 @@ export async function backfillGrantsFromPaidRequests(): Promise<{
 
   const { data: paid, error } = await supa
     .from("econ_requests")
-    .select("id, amounts, purpose, member_id, decided_by, econ_members(nation_id, leader_name, discord_id, nation_name)")
+    .select(
+      "id, amounts, purpose, member_id, decided_by, econ_members(nation_id, leader_name, discord_id, nation_name)"
+    )
     .eq("kind", "grant")
     .eq("status", "paid")
     .limit(2000);
@@ -494,7 +537,6 @@ export async function backfillGrantsFromPaidRequests(): Promise<{
       skipped += 1;
       continue;
     }
-    // also skip if meta filter unsupported — check by note
     const mem = Array.isArray(req.econ_members) ? req.econ_members[0] : req.econ_members;
     const nationId = Number((mem as { nation_id?: number } | null)?.nation_id || 0);
     if (!nationId) {
@@ -502,11 +544,7 @@ export async function backfillGrantsFromPaidRequests(): Promise<{
       continue;
     }
     const amounts = (req.amounts || {}) as Record<string, number>;
-    const clean: Record<string, number> = {};
-    for (const [k, v] of Object.entries(amounts)) {
-      const n = Math.round(Number(v) * 100) / 100;
-      if (Number.isFinite(n) && n > 0) clean[k] = n;
-    }
+    const clean = cleanAmounts(amounts);
     if (!Object.keys(clean).length) {
       skipped += 1;
       continue;
@@ -522,7 +560,7 @@ export async function backfillGrantsFromPaidRequests(): Promise<{
       grant_type: "request",
       amounts: clean,
       original_amounts: clean,
-      repaid_amounts: {},
+      repaid_amounts: { _value: 0 },
       repay_status: "open",
       meta: { source: "grant_request_backfill", request_id: req.id },
       status: "active",

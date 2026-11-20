@@ -122,6 +122,8 @@ export default async function HomePage() {
           pct: g.pct,
           remaining: g.remaining,
           original: g.original,
+          remainingValue: g.remainingValue,
+          originalValue: g.originalValue,
           note: g.note,
         }))}
       />

@@ -94,12 +94,12 @@ export default function GrantRepayPanel() {
       const r = await fetch("/api/gov/grants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "run_repay_sync" }),
+        body: JSON.stringify({ action: "run_repay_sync", resetCursor: true }),
       });
       const j = await r.json();
       if (j.ok === false) throw new Error(j.error || j.errors?.[0] || "Sync failed");
       setMsg(
-        `Sync: on-tax nations ${j.onTax ?? 0}, applied ${j.applied ?? 0}, grants touched ${j.grantsTouched ?? 0}`
+        `Sync: on-tax ${j.onTax ?? 0}, bankrecs ${j.bankrecsSeen ?? 0}, applied ${j.applied ?? 0}, value ~$${Number(j.valueApplied || 0).toLocaleString()}, grants ${j.grantsTouched ?? 0}`
       );
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Failed");
