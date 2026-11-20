@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RESOURCES, LABEL, describe, fmt } from "@/lib/resources";
 import OffshorePanel from "./OffshorePanel";
+import DiscordPanel from "./DiscordPanel";
 import GrantsPanel from "./GrantsPanel";
 
 type Member = { discord_username: string; nation_id: number; leader_name: string | null } | null;
@@ -818,7 +819,12 @@ export default function GovClient({ owner }: { owner: boolean }) {
         />
       )}
 
-      {tab === "offshore" && <OffshorePanel />}
+      {tab === "offshore" && (
+        <div className="space-y-4">
+          <DiscordPanel />
+          <OffshorePanel />
+        </div>
+      )}
 
       {adjustMember && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center">
