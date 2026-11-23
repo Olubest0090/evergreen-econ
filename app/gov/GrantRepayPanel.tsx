@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 
 export default function GrantRepayPanel() {
   const [taxId, setTaxId] = useState("");
+  const [defaultTaxId, setDefaultTaxId] = useState("");
+  const [autoRemove, setAutoRemove] = useState(false);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [current, setCurrent] = useState<number | null>(null);
@@ -36,7 +38,7 @@ export default function GrantRepayPanel() {
       const r = await fetch("/api/gov/grants", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "set_repay_tax", tax_id: Number(taxId) }),
+        body: JSON.stringify({ action: "set_repay_tax", tax_id: Number(taxId), default_tax_id: defaultTaxId ? Number(defaultTaxId) : null, auto_remove: autoRemove }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "Failed");

@@ -12,6 +12,10 @@ import { RESOURCES } from "@/lib/resources";
 export type GrantRepaySettings = {
   tax_id: number;
   alliance_id?: number;
+  /** Move here when grant bar is 100% (default / normal AA tax). */
+  default_tax_id?: number;
+  /** Attempt in-game tax bracket change when fully repaid. */
+  auto_remove?: boolean;
 };
 
 const RES = ["money", "food", "coal", "oil", "uranium", "lead", "iron", "bauxite", "gasoline", "munitions", "steel", "aluminum"] as const;
@@ -82,13 +86,20 @@ export function progressPct(
 export async function getGrantRepaySettings(): Promise<GrantRepaySettings | null> {
   const s = await getSetting<GrantRepaySettings | null>("grant_repay", null);
   if (!s || !Number(s.tax_id)) return null;
-  return { tax_id: Number(s.tax_id), alliance_id: s.alliance_id ? Number(s.alliance_id) : undefined };
+  return {
+    tax_id: Number(s.tax_id),
+    alliance_id: s.alliance_id ? Number(s.alliance_id) : undefined,
+    default_tax_id: s.default_tax_id ? Number(s.default_tax_id) : undefined,
+    auto_remove: s.auto_remove === true,
+  };
 }
 
 export async function saveGrantRepaySettings(s: GrantRepaySettings) {
   return setSetting("grant_repay", {
     tax_id: Number(s.tax_id),
     alliance_id: s.alliance_id ? Number(s.alliance_id) : undefined,
+    default_tax_id: s.default_tax_id ? Number(s.default_tax_id) : undefined,
+    auto_remove: s.auto_remove === true,
   });
 }
 
@@ -475,6 +486,13 @@ export async function runGrantRepaySync(opts?: {
     await setSetting("grant_repay_cursor", { last_bankrec_id: maxId });
   }
 
+  let completion = { completedNations: 0, notified: 0, taxMoved: 0 };
+  try {
+    completion = await processFullyRepaidNations(settings);
+  } catch (e) {
+    errors.push(e instanceof Error ? e.message : "completion check failed");
+  }
+
   return {
     ok: true,
     onTax: onTaxNations.size,
@@ -482,8 +500,220 @@ export async function runGrantRepaySync(opts?: {
     valueApplied: Math.round(valueApplied * 100) / 100,
     grantsTouched: touched.size,
     bankrecsSeen: recs.length,
+    completedNations: completion.completedNations,
+    notified: completion.notified,
+    taxMoved: completion.taxMoved,
     errors,
   };
+}
+
+
+/** Notify Discord that a member finished grant repayment. */
+async function notifyGrantFullyRepaid(opts: {
+  nationId: number;
+  leaderName?: string | null;
+  nationName?: string | null;
+  totalValue: number;
+  taxMoved: boolean | null;
+  taxMoveError?: string | null;
+  defaultTaxId?: number | null;
+}) {
+  try {
+    const { getDiscordBotToken } = await import("@/lib/secrets");
+    const token = await getDiscordBotToken();
+    if (!token) return;
+    const cfg = await getSetting<{
+      grant_channel_id?: string;
+      deposit_channel_id?: string;
+      econ_role_id?: string;
+    }>("discord_channels", {});
+    const ch =
+      cfg.grant_channel_id?.trim() ||
+      process.env.DISCORD_GRANT_CHANNEL_ID?.trim() ||
+      cfg.deposit_channel_id?.trim() ||
+      process.env.DISCORD_DEPOSIT_CHANNEL_ID?.trim() ||
+      "";
+    if (!ch) return;
+    const role = cfg.econ_role_id?.trim() || process.env.DISCORD_ECON_ROLE_ID?.trim() || "";
+    const who =
+      opts.leaderName || opts.nationName || `Nation #${opts.nationId}`;
+    let body =
+      (role ? `<@&${role}> ` : "") +
+      `**Grant repayment complete** — **${who}** (#${opts.nationId})\n` +
+      `Estimated grant value fully paid down (~$${Math.round(opts.totalValue).toLocaleString()}).\n`;
+    if (opts.taxMoved === true) {
+      body += `✅ Auto-moved off grant tax → tax #${opts.defaultTaxId}.`;
+    } else if (opts.taxMoved === false) {
+      body += `⚠️ Could not auto-change tax bracket${
+        opts.taxMoveError ? `: ${opts.taxMoveError}` : ""
+      }. **Remove them from the grant tax ID in-game.**`;
+    } else {
+      body += `**Action:** remove them from the grant repayment tax bracket in-game.`;
+    }
+    await fetch(`https://discord.com/api/v10/channels/${ch}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content: body }),
+    });
+  } catch (e) {
+    console.error("notifyGrantFullyRepaid:", e);
+  }
+}
+
+/**
+ * Try to move nation to default tax bracket via GraphQL mutation.
+ * Requires verified bot key + bank access. Returns null if not configured.
+ */
+async function tryAssignTaxBracket(
+  nationId: number,
+  taxBracketId: number
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const { getVerifiedBotKey, getBotKeyApiKey, getBankApiKey, getPnwApiKey } =
+      await import("@/lib/secrets");
+    const botKey = await getVerifiedBotKey();
+    if (!botKey) return { ok: false, error: "VERIFIED_BOT_KEY not set" };
+    const key = (await getBankApiKey()) || (await getPnwApiKey());
+    if (!key) return { ok: false, error: "BANK/PNW API key not set" };
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Bot-Key": botKey,
+      "X-Api-Key": (await getBotKeyApiKey()) || key,
+    };
+    // Documented community mutation name used by several bots
+    const query = `mutation($id:ID!,$target:ID!){
+      assignTaxBracket(id:$id, target_id:$target) { id }
+    }`;
+    const res = await fetch("https://api.politicsandwar.com/graphql", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        query,
+        variables: { id: String(taxBracketId), target: String(nationId) },
+      }),
+      cache: "no-store",
+    });
+    const text = await res.text();
+    let json: { data?: unknown; errors?: { message: string }[] } = {};
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return { ok: false, error: `HTTP ${res.status}` };
+    }
+    if (json.errors?.length) return { ok: false, error: json.errors[0].message };
+    if (!json.data) return { ok: false, error: "No data from assignTaxBracket" };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "tax assign failed" };
+  }
+}
+
+/**
+ * After tax apply: any nation whose active grants are all paid → notify + optional auto tax move.
+ */
+export async function processFullyRepaidNations(settings: GrantRepaySettings): Promise<{
+  completedNations: number;
+  notified: number;
+  taxMoved: number;
+}> {
+  const supa = db();
+  const { data: grants } = await supa
+    .from("econ_grants")
+    .select(
+      "id, nation_id, leader_name, nation_name, amounts, original_amounts, repaid_amounts, repay_status, status, meta"
+    )
+    .eq("status", "active");
+
+  // Group by nation
+  const byNation = new Map<
+    number,
+    {
+      grants: typeof grants;
+      leader?: string | null;
+      nationName?: string | null;
+    }
+  >();
+  for (const g of grants ?? []) {
+    const nid = Number(g.nation_id);
+    if (!nid) continue;
+    const row = byNation.get(nid) || { grants: [] as NonNullable<typeof grants>, leader: g.leader_name, nationName: g.nation_name };
+    row.grants = [...(row.grants || []), g];
+    if (g.leader_name) row.leader = g.leader_name;
+    if (g.nation_name) row.nationName = g.nation_name;
+    byNation.set(nid, row);
+  }
+
+  let completedNations = 0;
+  let notified = 0;
+  let taxMoved = 0;
+
+  for (const [nationId, pack] of byNation) {
+    let totalO = 0;
+    let totalR = 0;
+    let allPaid = true;
+    for (const g of pack.grants || []) {
+      const original = cleanAmounts(g.original_amounts || g.amounts);
+      const raw = (g.repaid_amounts || {}) as Record<string, number>;
+      const oVal = amountsValue(original);
+      const rVal =
+        Number(raw._value) > 0 ? Number(raw._value) : amountsValue(cleanAmounts(raw));
+      totalO += oVal;
+      totalR += rVal;
+      if (rVal < oVal - 0.01 && String(g.repay_status) !== "paid") allPaid = false;
+    }
+    if (!allPaid || totalO <= 0) continue;
+    if (totalR < totalO - 0.01) continue;
+
+    // Already notified?
+    const already = pack.grants?.some(
+      (g) => (g.meta as { fully_repaid_notified?: boolean } | null)?.fully_repaid_notified
+    );
+    if (already) continue;
+
+    completedNations += 1;
+
+    // Mark grants completed
+    for (const g of pack.grants || []) {
+      const meta = { ...((g.meta as object) || {}), fully_repaid_notified: true, fully_repaid_at: new Date().toISOString() };
+      await supa
+        .from("econ_grants")
+        .update({
+          repay_status: "paid",
+          status: "completed",
+          meta,
+        })
+        .eq("id", g.id);
+    }
+
+    let moved: boolean | null = null;
+    let moveErr: string | null = null;
+    if (settings.auto_remove && settings.default_tax_id) {
+      const r = await tryAssignTaxBracket(nationId, settings.default_tax_id);
+      if (r.ok) {
+        moved = true;
+        taxMoved += 1;
+      } else {
+        moved = false;
+        moveErr = r.error;
+      }
+    }
+
+    await notifyGrantFullyRepaid({
+      nationId,
+      leaderName: pack.leader,
+      nationName: pack.nationName,
+      totalValue: totalO,
+      taxMoved: moved,
+      taxMoveError: moveErr,
+      defaultTaxId: settings.default_tax_id ?? null,
+    });
+    notified += 1;
+  }
+
+  return { completedNations, notified, taxMoved };
 }
 
 export async function migrateGrantsForRepay(): Promise<{ updated: number }> {
