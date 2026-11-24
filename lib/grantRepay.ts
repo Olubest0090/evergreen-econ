@@ -335,6 +335,9 @@ export async function runGrantRepaySync(opts?: {
   valueApplied: number;
   grantsTouched: number;
   bankrecsSeen: number;
+  completedNations?: number;
+  notified?: number;
+  taxMoved?: number;
   errors: string[];
 }> {
   const settings = await getGrantRepaySettings();
